@@ -102,7 +102,6 @@ class EwaldSummation(MSONable):
         if not structure.lattice.is_3d_periodic:
             raise ValueError(f"EwaldSummation requires a 3D periodic lattice, got pbc={structure.lattice.pbc}.")
         self._struct = structure
-        self._charged = abs(structure.charge) > 1e-8
         self._vol = structure.volume
         self._compute_forces = compute_forces
 
@@ -122,6 +121,23 @@ class EwaldSummation(MSONable):
         # Ewald summation is rather expensive, and these shortcuts are
         # necessary to obtain several factors of improvement in speedup.
         self._oxi_states = [compute_average_oxidation_state(site) for site in structure]
+        # Net cell charge from the same per-site charges used in the sums. The neutralizing background
+        # must cancel these, so they take precedence over Structure.charge, which only counts oxidation
+        # states (or an explicitly set charge) and misses charges supplied via the "charge" site property.
+        self._total_charge = float(sum(self._oxi_states))
+        self._charged = abs(self._total_charge) > 1e-8
+        # Only check consistency when the structure itself defines a charge, i.e. an explicitly set
+        # charge or oxidation states. Charges supplied purely via the "charge" site property are not
+        # counted by Structure.charge, so a mismatch there is expected and not worth a warning.
+        has_explicit_charge = getattr(structure, "_charge", None) is not None
+        has_oxi_states = any(getattr(sp, "oxi_state", None) is not None for sp in structure.types_of_species)
+        struct_charge = structure.charge if has_explicit_charge or has_oxi_states else self._total_charge
+        if abs(self._total_charge - struct_charge) > 1e-8:
+            warnings.warn(
+                f"Sum of site charges ({self._total_charge}) is inconsistent with structure.charge "
+                f"({struct_charge}). The charged-cell correction uses the sum of site charges.",
+                stacklevel=2,
+            )
 
         self._coords = np.array(self._struct.cart_coords)
 
@@ -132,7 +148,7 @@ class EwaldSummation(MSONable):
 
         # Compute the correction for a charged cell
         self._charged_cell_energy = (
-            -EwaldSummation.CONV_FACT / 2 * np.pi / structure.volume / self._eta * structure.charge**2
+            -EwaldSummation.CONV_FACT / 2 * np.pi / structure.volume / self._eta * self._total_charge**2
         )
 
     def compute_partial_energy(self, removed_indices):
