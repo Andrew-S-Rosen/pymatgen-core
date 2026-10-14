@@ -73,7 +73,8 @@ class EwaldSummation(MSONable):
         Args:
             structure (Structure): Input structure that must have proper
                 Species on all sites, i.e. Element with oxidation state. Use
-                Structure.add_oxidation_state... for example.
+                Structure.add_oxidation_state... for example. The lattice
+                must be periodic in all three directions.
             real_space_cut (float): Real space cutoff radius dictating how
                 many terms are used in the real space sum. Defaults to None,
                 which means determine automatically using the formula given
@@ -94,7 +95,12 @@ class EwaldSummation(MSONable):
                 cutoffs are set to None.
             compute_forces (bool): Whether to compute forces. False by
                 default since it is usually not needed.
+
+        Raises:
+            ValueError: If the lattice is not periodic in all three directions.
         """
+        if not structure.lattice.is_3d_periodic:
+            raise ValueError(f"EwaldSummation requires a 3D periodic lattice, got pbc={structure.lattice.pbc}.")
         self._struct = structure
         self._charged = abs(structure.charge) > 1e-8
         self._vol = structure.volume
