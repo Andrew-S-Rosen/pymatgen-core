@@ -1,7 +1,7 @@
 
 # Changelog
 
-## v2026.10.16
+## v2026.10.17
 
 - PR #162 `EwaldSummation` raises a `ValueError` for structures whose lattice is not 3D periodic. `_calc_real_and_point` uses `Lattice.get_points_in_sphere`, which honours `Lattice.pbc` and drops images along non-periodic axes, while `_calc_recip` always uses the 3D-periodic reciprocal lattice, so the real- and reciprocal-space terms described different systems and the total energy depended on `eta`. Results for 3D-periodic structures are unchanged. Fixes materialsproject/pymatgen#4718. (by @shyuep)
 - PR #164 `EwaldSummation` derives the charged-cell background correction from the summed per-site charges actually used in the Ewald sums, rather than `Structure.charge`, which ignores the `charge` site property. Structures charged via site-property charges previously got no background correction and an `eta`-dependent energy. A `UserWarning` is emitted when the summed site charges differ from an explicitly set charge or the oxidation-state total by more than 1e-8. Oxidation-state-decorated structures are unaffected. Fixes materialsproject/pymatgen#4719. (by @shyuep)
