@@ -96,6 +96,20 @@ class TestVasprun(MatSciTest):
         assert vasp_run.md_n_steps == 100
         assert vasp_run.converged_ionic
 
+    def test_vasprun_ml_without_calculation_tags(self):
+        """Test MLFF MD output that stores steps outside ``<calculation>`` tags."""
+        filepath = f"{VASP_OUT_DIR}/vasprun.ml_md_no_calculation.xml.gz"
+        vasp_run = Vasprun(filepath, parse_potcar_file=False)
+        assert len(vasp_run.ionic_steps) == 0
+        assert len(vasp_run.md_data) == vasp_run.nionic_steps == 10
+        assert vasp_run.converged
+
+        vasp_run_skip = Vasprun(filepath, ionic_step_skip=3, ionic_step_offset=1, parse_potcar_file=False)
+        assert vasp_run_skip.nionic_steps == 10
+        assert [step["energy"]["total"] for step in vasp_run_skip.md_data] == approx(
+            [-23.39220561, -23.36690383, -23.34485475]
+        )
+
     def test_vasprun_md(self):
         # Test for simple MD simulation (no ML).
         # Does not generate the `md_data` attribute in Vasprun. Data based on `ionic_steps`
@@ -352,7 +366,7 @@ class TestVasprun(MatSciTest):
         assert entry_id_toks[2] == "15.0"
         assert entry_id_toks[3] == "da7b01a471dc249323505c0676ae7350"
 
-        assert entry.parameters["run_type"] == "PBEO or other Hybrid Functional"
+        assert entry.parameters["run_type"] == "HSE06"
 
     def test_unconverged(self):
         filepath = f"{VASP_OUT_DIR}/vasprun.unconverged.xml.gz"
@@ -669,6 +683,7 @@ class TestVasprun(MatSciTest):
         filepath = f"{VASP_OUT_DIR}/vasprun.sc_overflow.xml.gz"
         with pytest.warns(UserWarning, match="Float overflow .* encountered in vasprun"):
             vasp_run = Vasprun(filepath)
+
         first_ionic_step = vasp_run.ionic_steps[0]
         elec_step = first_ionic_step["electronic_steps"][29]
         assert np.isnan(elec_step["e_wo_entrp"])
@@ -1488,6 +1503,11 @@ class TestOutcar:
                 first_one_only=True,
             )
 
+    def test_truncated_table_returns_without_hanging(self):
+        with pytest.warns(UserWarning, match="Table in .* is truncated"):
+            outcar = Outcar(f"{VASP_OUT_DIR}/OUTCAR.truncated.gz")
+        assert outcar.data["nplwvs_at_kpoints"] == []
+
 
 class TestBSVasprun(MatSciTest):
     def test_get_band_structure(self):
@@ -1560,6 +1580,48 @@ class TestOszicar(MatSciTest):
         assert oszicar.final_energy == approx(-10.645278)
         assert set(oszicar.ionic_steps[-1]) == {"F", "E0", "dE", "mag"}
 
+    def test_float_overflow(self):
+        oszicar_path = Path(self.tmp_path) / "OSZICAR"
+        oszicar_path.write_text(
+            """\
+       N       E                     dE             d eps       ncg     rms          rms(c)
+DAV:   1     0.831012218308E+03    0.83101E+03   -0.25939E+05  4672   0.894E+02
+          1 T= ****** E= 0.64876404E+06 F= 0.49220367E+06 E0= 0.49220367E+06  EK= 0.15656E+06 SP= 0.00E+00 SK= 0.00E+00
+""",
+            encoding="utf-8",
+        )
+
+        with pytest.warns(UserWarning, match="Float overflow .* encountered in vasprun"):
+            oszicar = Oszicar(oszicar_path)
+
+        ionic_step = oszicar.ionic_steps[0]
+        assert np.isnan(ionic_step["T"])
+
+        assert ionic_step["E"] == approx(648_764.04)
+        assert ionic_step["F"] == approx(492_203.67)
+
+    def test_missing_exponent_marker(self):
+        oszicar_path = Path(self.tmp_path) / "OSZICAR"
+        oszicar_path.write_text(
+            """\
+       N       E                     dE             d eps       ncg     rms          rms(c)
+DAV:   1    -.16497036E+04       -.302333-128   -0.25939E+05  4672   0.894E+02
+       1 F= -.16497036E+04 E0= -.16497036E+04 d E =-.302333-128 mag= 13.9998
+""",
+            encoding="utf-8",
+        )
+
+        oszicar = Oszicar(oszicar_path)
+        electronic_step = oszicar.electronic_steps[0][0]
+        assert electronic_step["E"] == approx(-1649.7036)
+        assert electronic_step["dE"] == float("-.302333E-128")
+
+        ionic_step = oszicar.ionic_steps[0]
+        assert ionic_step["F"] == approx(-1649.7036)
+        assert ionic_step["E0"] == approx(-1649.7036)
+        assert ionic_step["dE"] == float("-.302333E-128")
+        assert ionic_step["mag"] == approx(13.9998)
+
 
 class TestGetBandStructureFromVaspMultipleBranches:
     def test_read_multi_branches(self):
@@ -1611,6 +1673,17 @@ class TestLocpot(MatSciTest):
         locpot = Locpot.from_file(filepath)
         assert locpot.dim == (2, 2, 5)
         assert {str(ele) for ele in locpot.structure.composition} == {"Mg", "Si"}
+
+    def test_collinear_spin_channels(self):
+        locpot = Locpot(
+            Structure(Lattice.cubic(1), ["H"], [[0, 0, 0]]),
+            {"total": np.ones((2, 2, 2)), "diff": np.full((2, 2, 2), 2)},
+        )
+        assert set(locpot.data) == {"spin_up", "spin_down"}
+        assert_allclose(locpot.spin_data[Spin.up], 1)
+        assert_allclose(locpot.spin_data[Spin.down], 2)
+        with pytest.warns(DeprecationWarning, match="'total'.*'spin_up'"):
+            assert_allclose(locpot.data["total"], 1)
 
 
 class TestChgcar(MatSciTest):
@@ -1678,6 +1751,31 @@ class TestChgcar(MatSciTest):
         assert "augmentation occupancies   1   3" in contents
         assert "0.1000000000E+01 0.2000000000E+01 0.3000000000E+01" in contents
 
+    def test_write_legacy_aug_lines_keep_their_own_newline(self):
+        # Legacy data_aug stores raw text lines that already end in "\n". Writing
+        # must not append a second one: a blank line inside an augmentation block
+        # makes VASP's RD_RHO_PAW declare the ion corrupt, discard the CHGCAR and
+        # silently fall back to an atomic density (ICHARG=1 degrades to 2).
+        legacy_aug = {
+            "total": [
+                "augmentation occupancies   1   3\n",
+                " 0.1000000000E+01 0.2000000000E+01 0.3000000000E+01 \n",
+            ]
+        }
+        chgcar = Chgcar(self.chgcar_no_spin.structure, self.chgcar_no_spin.data, data_aug=legacy_aug)
+        out_path = f"{self.tmp_path}/CHGCAR_legacy_aug_newlines"
+        chgcar.write_file(out_path)
+        contents = Path(out_path).read_text(encoding="utf-8")
+
+        aug_lines = contents[contents.index("augmentation occupancies") :].splitlines()
+        assert all(line.strip() for line in aug_lines), "blank line inside augmentation block"
+        assert aug_lines[0] == "augmentation occupancies   1   3"
+        assert aug_lines[1].split() == [
+            "0.1000000000E+01",
+            "0.2000000000E+01",
+            "0.3000000000E+01",
+        ]
+
     def test_soc_chgcar(self):
         assert set(self.chgcar_NiO_soc.data) == {
             "total",
@@ -1709,6 +1807,12 @@ class TestChgcar(MatSciTest):
         assert_allclose(chg_from_file.data_aug["diff_x"][1], self.chgcar_NiO_soc.data_aug["diff_x"][1])
         assert_allclose(chg_from_file.data_aug["diff_y"][1], self.chgcar_NiO_soc.data_aug["diff_y"][1])
         assert_allclose(chg_from_file.data_aug["diff_z"][1], self.chgcar_NiO_soc.data_aug["diff_z"][1])
+
+        # Hand-constructed SOC data without the scalar "diff" key is still spin-polarized
+        soc_data = {key: np.ones((2, 2, 2)) for key in ("total", "diff_x", "diff_y", "diff_z")}
+        chg = Chgcar(self.chgcar_NiO_soc.structure, soc_data)
+        assert chg.is_spin_polarized
+        assert chg.is_soc
 
     @pytest.mark.skipif(h5py is None, reason="h5py required for HDF5 support.")
     def test_hdf5(self):
@@ -1784,11 +1888,26 @@ class TestAeccars(MatSciTest):
 class TestElfcar(MatSciTest):
     def test_init(self):
         elfcar = Elfcar.from_file(f"{VASP_OUT_DIR}/ELFCAR.gz")
-        assert np.mean(elfcar.data["total"]) == approx(0.19076207645194002)
-        assert np.mean(elfcar.data["diff"]) == approx(0.19076046677910055)
+        assert np.mean(elfcar.data["spin_up"]) == approx(0.19076207645194002)
+        assert np.mean(elfcar.data["spin_down"]) == approx(0.19076046677910055)
+        assert_allclose(elfcar.spin_data[Spin.up], elfcar.data["spin_up"])
+        assert_allclose(elfcar.spin_data[Spin.down], elfcar.data["spin_down"])
+        with pytest.warns(DeprecationWarning, match="'total'.*'spin_up'"):
+            assert_allclose(elfcar.data["total"], elfcar.data["spin_up"])
+        with pytest.warns(DeprecationWarning, match="'diff'.*'spin_down'"):
+            assert_allclose(elfcar.data["diff"], elfcar.data["spin_down"])
+        with pytest.raises(ValueError, match="total/difference"):
+            elfcar.get_integrated_diff(0, 1)
         reconstituted = Elfcar.from_dict(elfcar.as_dict())
         assert elfcar.data == reconstituted.data
         assert elfcar.poscar.structure == reconstituted.poscar.structure
+
+        legacy_dict = elfcar.as_dict()
+        legacy_dict["data"] = {"total": elfcar.data["spin_up"], "diff": elfcar.data["spin_down"]}
+        migrated = Elfcar.from_dict(legacy_dict)
+        assert set(migrated.data) == {"spin_up", "spin_down"}
+        assert_allclose(migrated.data["spin_up"], elfcar.data["spin_up"])
+        assert_allclose(migrated.data["spin_down"], elfcar.data["spin_down"])
 
         # Test copy preserve type
         elfcar_copy = elfcar.copy()
@@ -1799,8 +1918,8 @@ class TestElfcar(MatSciTest):
         out_path = f"{self.tmp_path}/ELFCAR_pmg"
         elfcar.write_file(out_path)
         reloaded = Elfcar.from_file(out_path)
-        assert_allclose(reloaded.data["total"], elfcar.data["total"])
-        assert_allclose(reloaded.data["diff"], elfcar.data["diff"])
+        assert_allclose(reloaded.data["spin_up"], elfcar.data["spin_up"])
+        assert_allclose(reloaded.data["spin_down"], elfcar.data["spin_down"])
         assert reloaded.poscar.structure == elfcar.poscar.structure
 
     def test_truncated_file(self):
@@ -1823,11 +1942,11 @@ class TestElfcar(MatSciTest):
     def test_alpha(self):
         elfcar = Elfcar.from_file(f"{VASP_OUT_DIR}/ELFCAR.gz")
         alpha = elfcar.get_alpha()
-        assert np.median(alpha.data["total"]) == approx(2.936678808979031)
+        assert np.median(alpha.data["spin_up"]) == approx(2.936678808979031)
 
     def test_interpolation(self):
         elfcar = Elfcar.from_file(f"{VASP_OUT_DIR}/ELFCAR.gz")
-        assert elfcar.value_at(0.4, 0.5, 0.6) == approx(0.0918471)
+        assert elfcar.value_at(0.4, 0.5, 0.6) == approx(0.1167966)
         assert len(elfcar.linear_slice([0.0, 0.0, 0.0], (1.0, 1.0, 1.0))) == 100
 
         with pytest.raises(ValueError, match="lengths of p1 and p2 should be 3"):
@@ -3426,6 +3545,11 @@ class TestVaspwave(MatSciTest):
         assert set(chgcar_h5.data) == {"total", "diff"}
         assert_allclose(chgcar_h5.data["total"], chgcar.data["total"], atol=1e-6)
         assert_allclose(chgcar_h5.data["diff"], chgcar.data["diff"], atol=1e-6)
+        assert chgcar_h5.data_aug.keys() == chgcar.data_aug.keys()
+        for data_key, aug_data in chgcar.data_aug.items():
+            assert chgcar_h5.data_aug[data_key].keys() == aug_data.keys()
+            for ion_idx, values in aug_data.items():
+                assert_allclose(chgcar_h5.data_aug[data_key][ion_idx], values, atol=1e-6)
 
     @pytest.mark.skipif(
         not (Path(TEST_DIR) / "outputs" / "vaspwave-H2.tar.gz").exists(),
@@ -3440,9 +3564,9 @@ class TestVaspwave(MatSciTest):
         assert locpot_h5.dim == locpot.dim
         assert locpot_h5.is_spin_polarized
         assert not locpot_h5.is_soc
-        assert set(locpot_h5.data) == {"total", "diff"}
-        assert_allclose(locpot_h5.data["total"], locpot.data["total"], atol=8e-5)
-        assert_allclose(locpot_h5.data["diff"], locpot.data["diff"], atol=8e-5)
+        assert set(locpot_h5.data) == {"spin_up", "spin_down"}
+        assert_allclose(locpot_h5.data["spin_up"], locpot.data["spin_up"], atol=8e-5)
+        assert_allclose(locpot_h5.data["spin_down"], locpot.data["spin_down"], atol=8e-5)
 
     @pytest.mark.skipif(
         not (Path(TEST_DIR) / "outputs" / "vaspwave-H2.tar.gz").exists(),
@@ -3476,6 +3600,11 @@ class TestVaspwave(MatSciTest):
         assert diff_y_rel_err < 2e-4
         assert diff_z_rel_err < 1e-3
         assert diff_rel_err < 2e-4
+        assert chgcar_h5.data_aug.keys() == chgcar.data_aug.keys()
+        for data_key, aug_data in chgcar.data_aug.items():
+            assert chgcar_h5.data_aug[data_key].keys() == aug_data.keys()
+            for ion_idx, values in aug_data.items():
+                assert_allclose(chgcar_h5.data_aug[data_key][ion_idx], values.real, atol=1e-6)
 
     @pytest.mark.skipif(
         not (Path(TEST_DIR) / "outputs" / "vaspwave-H2.tar.gz").exists(),

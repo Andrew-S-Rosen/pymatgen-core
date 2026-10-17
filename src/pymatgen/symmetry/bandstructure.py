@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import itertools
 import warnings
+from typing import Any
 
 import networkx as nx
 import numpy as np
@@ -280,7 +281,7 @@ class HighSymmKpath(KPathBase):
         return labels
 
     @staticmethod
-    def get_continuous_path(bandstructure):
+    def get_continuous_path(bandstructure: BandStructureSymmLine) -> BandStructureSymmLine:
         """Obtain a continuous version of an inputted path using graph theory.
         This routine will attempt to add connections between nodes of
         odd-degree to ensure a Eulerian path can be formed. Initial
@@ -289,10 +290,10 @@ class HighSymmKpath(KPathBase):
         for more details.
 
         Args:
-            bandstructure (BandstructureSymmLine): BandstructureSymmLine object.
+            bandstructure (BandStructureSymmLine): BandStructureSymmLine object.
 
         Returns:
-            bandstructure (BandstructureSymmLine): New BandstructureSymmLine object with continuous path.
+            bandstructure (BandStructureSymmLine): New BandStructureSymmLine object with continuous path.
         """
         G = nx.Graph()
         labels = [point.label for point in bandstructure.kpoints if point.label is not None]
@@ -321,7 +322,12 @@ class HighSymmKpath(KPathBase):
 
         new_kpoints = []
         new_bands = {spin: [np.array([]) for _ in range(bandstructure.nb_bands)] for spin in spins}
-        new_projections = {spin: [[] for _ in range(bandstructure.nb_bands)] for spin in spins}
+
+        new_projections: dict[Spin, Any] = {}
+        if has_projections := isinstance(bandstructure.projections, dict) and all(
+            spin in bandstructure.projections for spin in spins
+        ):
+            new_projections = {spin: [[] for _ in range(bandstructure.nb_bands)] for spin in spins}
 
         n_branches = len(bandstructure.branches)
         new_branches = []
@@ -367,13 +373,14 @@ class HighSymmKpath(KPathBase):
                 for n, band in enumerate(bandstructure.bands[spin]):
                     new_bands[spin][n] = np.concatenate((new_bands[spin][n], band[start:stop:step]))
 
-            # projections
-            for spin in spins:
-                for n, band in enumerate(bandstructure.projections[spin]):
-                    new_projections[spin][n] += band[start:stop:step].tolist()
+                # projections
+                if has_projections:
+                    for n, band in enumerate(bandstructure.projections[spin]):
+                        new_projections[spin][n] += band[start:stop:step].tolist()
 
-        for spin in spins:
-            new_projections[spin] = np.array(new_projections[spin])
+        if has_projections:
+            for spin in spins:
+                new_projections[spin] = np.array(new_projections[spin])
 
         new_labels_dict = {key: point.frac_coords for key, point in bandstructure.labels_dict.items()}
 
@@ -382,7 +389,7 @@ class HighSymmKpath(KPathBase):
             eigenvals=new_bands,
             lattice=bandstructure.lattice_rec,
             efermi=bandstructure.efermi,
-            labels_dict=new_labels_dict,
+            labels_dict=new_labels_dict,  # type: ignore[arg-type]
             structure=bandstructure.structure,
-            projections=new_projections,
+            projections=new_projections or {},
         )

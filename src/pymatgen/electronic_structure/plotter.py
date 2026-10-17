@@ -1019,10 +1019,10 @@ class BSPlotterProjected(BSPlotter):
 
         for col_idx, element in enumerate(dictio):
             for row_idx in range(n_rows):
-                if n_cols == 1 and n_cols == 1:
+                if n_cols == 1 and n_rows == 1:
                     ax = axs
-                elif n_rows == 1:
-                    ax = axs[col_idx]
+                elif n_cols == 1 or n_rows == 1:
+                    ax = axs[max(row_idx, col_idx)]
                 else:
                     ax = axs[row_idx, col_idx]
 
@@ -1302,7 +1302,7 @@ class BSPlotterProjected(BSPlotter):
             "dyz": 5,
             "dz2": 6,
             "dxz": 7,
-            "dx2": 8,
+            "dx2_y2": 8,
             "f_3": 9,
             "f_2": 10,
             "f_1": 11,
@@ -1366,7 +1366,7 @@ class BSPlotterProjected(BSPlotter):
                             for anum in dictpa[elt]:
                                 edict[f"{elt}{anum}"] = {}
                                 for morb in dictio[elt]:
-                                    edict[f"{elt}{anum}"][morb] = proj[Spin.up][band_idx][j][setos[morb]][anum - 1]
+                                    edict[f"{elt}{anum}"][morb] = proj[Spin.down][band_idx][j][setos[morb]][anum - 1]
                         proj_br[-1][str(Spin.down)][band_idx].append(edict)
 
         # Adjust projections for plot
@@ -1649,7 +1649,7 @@ class BSPlotterProjected(BSPlotter):
                 2 columns.
 
         Returns:
-            A pyplot object with different subfigures for different projections.
+            A list of plt.Axes with different subplots for different projections.
             The blue and red colors lines are bands
             for spin up and spin down. The green and cyan dots are projections
             for spin up and spin down. The bigger
@@ -1657,7 +1657,7 @@ class BSPlotterProjected(BSPlotter):
             character for the corresponding elements
             and orbitals. List of individual orbitals and their numbers (set up
             by VASP and no special meaning):
-            s = 0; py = 1 pz = 2 px = 3; dxy = 4 dyz = 5 dz2 = 6 dxz = 7 dx2 = 8;
+            s = 0; py = 1 pz = 2 px = 3; dxy = 4 dyz = 5 dz2 = 6 dxz = 7 dx2_y2 = 8;
             f_3 = 9 f_2 = 10 f_1 = 11 f0 = 12 f1 = 13 f2 = 14 f3 = 15
         """
         dictio, sum_morbs = self._Orbitals_SumOrbitals(dictio, sum_morbs)
@@ -1670,7 +1670,7 @@ class BSPlotterProjected(BSPlotter):
             )
 
         band_linewidth = 0.5
-        ax = pretty_plot(w_h_size[0], w_h_size[1])
+        fig_main = plt.figure(figsize=w_h_size)
         proj_br_d, dictio_d, dictpa_d, branches = self._get_projections_by_branches_patom_pmorb(
             dictio, dictpa, sum_atoms, sum_morbs, selected_branches
         )
@@ -1688,19 +1688,16 @@ class BSPlotterProjected(BSPlotter):
                     count += 1
                     if num_column is None:
                         if n_figs == 1:
-                            plt.subplot(1, 1, 1)
+                            ax = plt.subplot(1, 1, 1)
                         else:
                             row = n_figs // 2
-                            if n_figs % 2 == 0:
-                                plt.subplot(row, 2, count)
-                            else:
-                                plt.subplot(row + 1, 2, count)
+                            ax = plt.subplot(row, 2, count) if n_figs % 2 == 0 else plt.subplot(row + 1, 2, count)
                     elif isinstance(num_column, int):
-                        row = n_figs / num_column
+                        row = n_figs // num_column
                         if n_figs % num_column == 0:
-                            plt.subplot(row, num_column, count)
+                            ax = plt.subplot(row, num_column, count)
                         else:
-                            plt.subplot(row + 1, num_column, count)
+                            ax = plt.subplot(row + 1, num_column, count)
                     else:
                         raise ValueError("The invalid 'num_column' is assigned. It should be an integer.")
 
@@ -1763,8 +1760,7 @@ class BSPlotterProjected(BSPlotter):
                     else:
                         ax.set_ylim(ylim)
                     ax.set_title(f"{elt} {numa} {o}")
-
-        return ax
+        return fig_main.get_axes()
 
     @classmethod
     def _Orbitals_SumOrbitals(cls, dictio, sum_morbs):
@@ -1779,7 +1775,7 @@ class BSPlotterProjected(BSPlotter):
             "dxy",
             "dyz",
             "dxz",
-            "dx2",
+            "dx2_y2",
             "dz2",
             "f_3",
             "f_2",
@@ -1791,7 +1787,7 @@ class BSPlotterProjected(BSPlotter):
         ]
         individual_orbs = {
             "p": ["px", "py", "pz"],
-            "d": ["dxy", "dyz", "dxz", "dx2", "dz2"],
+            "d": ["dxy", "dyz", "dxz", "dx2_y2", "dz2"],
             "f": ["f_3", "f_2", "f_1", "f0", "f1", "f2", "f3"],
         }
 
@@ -1861,7 +1857,7 @@ class BSPlotterProjected(BSPlotter):
         for elt in dictio:
             if len(dictio[elt]) == 1:
                 if len(dictio[elt][0]) > 1:
-                    if elt in sum_morbs:
+                    if sum_morbs is not None and elt in sum_morbs:
                         raise ValueError(
                             f"You cannot sum projection over one individual orbital {dictio[elt][0]!r} of {elt!r}."
                         )
@@ -2048,7 +2044,7 @@ class BSPlotterProjected(BSPlotter):
     def _summarize_keys_for_plot(self, dictio, dictpa, sum_atoms, sum_morbs):
         individual_orbs = {
             "p": ["px", "py", "pz"],
-            "d": ["dxy", "dyz", "dxz", "dx2", "dz2"],
+            "d": ["dxy", "dyz", "dxz", "dx2_y2", "dz2"],
             "f": ["f_3", "f_2", "f_1", "f0", "f1", "f2", "f3"],
         }
 
@@ -2616,7 +2612,7 @@ class BSDOSPlotter:
         blue = [0.5 * (blue[i] + blue[i + 1]) for i in range(n_seg)]
         alpha = np.ones(n_seg, float) * alpha
         lc = LineCollection(
-            seg,
+            list(seg),
             colors=list(zip(red, green, blue, alpha, strict=True)),
             linewidth=2,
             linestyles=linestyles,

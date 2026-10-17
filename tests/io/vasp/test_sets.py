@@ -23,7 +23,7 @@ from pymatgen.io.vasp.sets import (
     MODULE_DIR,
     BadInputSetWarning,
     CINEBSet,
-    DictSet,
+    MatPESRelaxSet,
     MatPESStaticSet,
     MITMDSet,
     MITNEBSet,
@@ -115,15 +115,15 @@ class TestSetChangeCheck(MatSciTest):
         known_hashes = {
             "MPHSERelaxSet.yaml": "1779cb6a6af43ad54a12aec22882b9b8aa3469b764e29ac4ab486960d067b811",
             "VASPIncarBase.yaml": "8c1ce90d6697e45b650e1881e2b3d82a733dba17fb1bd73747a38261ec65a4c4",
-            "MPSCANRelaxSet.yaml": "ad652ea740d06f9edd979494f31e25074b82b9fffdaaf7eff2ae5541fb0e6288",
+            "MPSCANRelaxSet.yaml": "3b426fc82bf541a805109f118954af0cc93aa69c4a10b67f0724962d4d0b30e9",
             "PBE64Base.yaml": "40e7e42159f59543b17f512666916001045f7644f422ccc45b8466d6a1cf0c48",
             "MPRelaxSet.yaml": "c9b0a519588fb3709509a9f9964632692584905e2961a0fe2e5f657561913083",
             "MITRelaxSet.yaml": "0b4bec619fa860dac648584853c3b3d5407e4148a85d0e95024fbd1dc315669d",
             "vdW_parameters.yaml": "7d2599a855533865335a313c043b6f89e03fc2633c88b6bc721723d94cc862bd",
-            "MatPESStaticSet.yaml": "4ec60ad4bbbb9a756f1b3fea8ca4eab8fc767d8f6a67332e7af3908c910fd7c5",
+            "MatPESStaticSet.yaml": "a3c394c6daf5239b1a6d0460bc0fc53fc1cb8a1cb620692f1de38e16367f6eb4",
             "MPAbsorptionSet.yaml": "e49cd0ab87864f1c244e9b5ceb4703243116ec1fbb8958a374ddff07f7a5625c",
             "PBE54Base.yaml": "cdffe123eca8b19354554b60a7f8de9b8776caac9e1da2bd2a0516b7bfac8634",
-            "MP24RelaxSet.yaml": "35a5d4456f01d644cf41218725c5e0896c59e1658045ecd1544579cbb1ed7b85",
+            "MP24RelaxSet.yaml": "f127fe2e0c7982fef9dfd95d0e77ddf03d2c2b10eb74959209b2e9a5afd55e7b",
         }
 
         for input_set, hash_str in hashes.items():
@@ -882,7 +882,7 @@ class TestMatPESStaticSet(MatSciTest):
         incar = input_set.incar
         assert incar["ALGO"] == "Normal"
         assert incar["EDIFF"] == approx(1.0e-05)
-        assert incar["ENAUG"] == 1360
+        assert "ENAUG" not in incar
         assert incar["ENCUT"] == 680
         assert incar["GGA"] == "Pe"
         assert incar["ISMEAR"] == 0
@@ -921,7 +921,7 @@ class TestMatPESStaticSet(MatSciTest):
         # test if default in MatPESStaticSet is prioritized.
         assert incar["ALGO"] == "Normal"
         assert incar["EDIFF"] == approx(1.0e-05)
-        assert incar["ENAUG"] == 1360
+        assert "ENAUG" not in incar
         assert incar["ENCUT"] == 680
         assert incar["GGA"] == "Pe"
         assert incar["ISMEAR"] == 0
@@ -987,6 +987,37 @@ class TestMatPESStaticSet(MatSciTest):
         assert incar["ALGO"] == "Normal"
         assert vis.potcar_symbols == ["Li_sv"]
         assert vis.kpoints is None
+
+
+class TestMatPESRelaxSet(MatSciTest):
+    def setup_method(self):
+        self.struct = Structure.from_file(f"{VASP_IN_DIR}/POSCAR")
+
+    def test_default(self):
+        input_set = MatPESRelaxSet(self.struct)
+        incar = input_set.incar
+        # relaxation parameters
+        assert incar["EDIFFG"] == approx(-0.02)
+        assert incar["IBRION"] == 2
+        assert incar["ISIF"] == 3
+        assert incar["NSW"] == 99
+        # all other settings should match MatPESStaticSet
+        static_incar = MatPESStaticSet(self.struct).incar
+        for key in set(incar) | set(static_incar):
+            if key in ("EDIFFG", "IBRION", "ISIF", "NSW"):
+                continue
+            assert incar.get(key) == static_incar.get(key), f"{key=} differs from MatPESStaticSet"
+        assert input_set.potcar_functional == "PBE_64"
+        assert input_set.kpoints is None
+
+    def test_r2scan(self):
+        input_set = MatPESRelaxSet(self.struct, xc_functional="R2SCAN")
+        incar = input_set.incar
+        assert incar["METAGGA"] == "R2scan"
+        assert incar.get("GGA") is None
+        assert incar["ALGO"] == "All"
+        assert incar["NSW"] == 99
+        assert incar["ISIF"] == 3
 
 
 class TestMPNonSCFSet(MatSciTest):
@@ -1458,6 +1489,7 @@ class TestMVLSlabSet(MatSciTest):
         assert incar_bulk["ISIF"] == 3
         assert incar_bulk["EDIFF"] == approx(1e-5)
         assert incar_bulk["EDIFFG"] == approx(-0.05)
+        assert "ENAUG" not in incar_bulk
         assert poscar_bulk.structure.formula == self.bulk.formula
 
     def test_slab(self):
@@ -1751,9 +1783,8 @@ class TestMVLScanRelaxSet(MatSciTest):
         ):
             MVLScanRelaxSet(self.struct, user_potcar_functional="PBE")
 
-    @pytest.mark.xfail(reason="TODO: need someone to fix this")
     @skip_if_no_psp_dir
-    def test_potcar_need_fix(self):
+    def test_potcar_functional_and_settings(self):
         test_potcar_set_1 = self.set(self.struct, user_potcar_functional="PBE_54")
         assert test_potcar_set_1.potcar.functional == "PBE_54"
 
@@ -1778,10 +1809,9 @@ class TestMVLScanRelaxSet(MatSciTest):
                     user_potcar_functional="PBE_54",
                     user_potcar_settings=user_potcar_settings,
                 )
-                expected = {
-                    **({"W": "W_sv"} if "W" in struct.symbol_set else {}),
-                    **(user_potcar_settings or {}),
-                }
+                expected = user_potcar_settings
+                if "W" in struct.symbol_set:
+                    expected = {"W": "W_sv", **(user_potcar_settings or {})}
                 assert relax_set.user_potcar_settings == expected
 
     def test_as_from_dict(self):
@@ -1806,7 +1836,7 @@ class TestMPScanRelaxSet(MatSciTest):
         incar = self.mp_scan_set.incar
         assert incar["METAGGA"] == "R2scan"
         assert incar["LASPH"]
-        assert incar["ENAUG"] == 1360
+        assert "ENAUG" not in incar
         assert incar["ENCUT"] == 680
         assert incar["NSW"] == 500
         # the default POTCAR contains metals, but no prev calc set --> bandgap unknown
@@ -2194,15 +2224,6 @@ def test_vasp_input_set_alias():
     assert VaspInputSet is VaspInputGenerator
 
 
-def test_dict_set_alias():
-    with pytest.warns(
-        FutureWarning,
-        match="DictSet is deprecated, and will be removed on 2025-12-31\nUse VaspInputSet",
-    ):
-        dictset = DictSet()
-    assert isinstance(dictset, VaspInputSet)
-
-
 class TestMP24Sets:
     def setup_method(self):
         self.relax_set = MP24RelaxSet
@@ -2239,7 +2260,6 @@ class TestMP24Sets:
             "ALGO": "Normal",
             "EDIFF": 1.0e-05,
             "EDIFFG": -0.02,
-            "ENAUG": 1360,
             "ENCUT": 680,
             "GGA_COMPAT": False,
             "KSPACING": 0.22,
@@ -2251,6 +2271,7 @@ class TestMP24Sets:
         }
 
         assert all(self.matches_ref(vis.incar[k], v) for k, v in expected_incar_relax.items())
+        assert "ENAUG" not in vis.incar
 
         assert self.relax_set(self.structure, xc_functional="r2SCAN")._config_dict == vis._config_dict
         assert vis.inherit_incar is False

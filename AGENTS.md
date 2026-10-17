@@ -1,10 +1,16 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to coding agents working in this repository.
 
 ## Repository scope
 
 This is `pymatgen-core` — the trimmed core of the pymatgen ecosystem (the larger umbrella `pymatgen` package depends on this). It implements the foundational data structures (`Element`, `Site`, `Molecule`, `Structure`, `Lattice`, `Composition`), symmetry/lattice operations, the I/O layer for many DFT/MD codes (VASP, ABINIT, CIF, Gaussian, LAMMPS, CP2K, Q-Chem, …), and analysis modules. Python ≥ 3.11, src layout under `src/pymatgen/`.
+
+## Language
+
+Always communicate in **English**: replies, comments, PR/issue descriptions, code comments, and docstrings. This is an international open-source project — never write in another language, regardless of what language the user or another contributor uses.
+
+**Commit messages must be in English.** This is a hard requirement: non-English commit messages are rejected and must be rewritten before merging, even if the author or reviewer communicated in another language.
 
 ## Setup & common commands
 
@@ -21,13 +27,28 @@ uv run pyright src             # secondary type check (CI runs this on src only)
 uv run pre-commit run --all-files
 ```
 
-Build / release helpers live in `tasks.py` (pyinvoke):
+Build and changelog helpers live in `tasks.py` (pyinvoke):
 
 ```sh
 uv run invoke lint             # ruff + mypy + ruff format
 uv run invoke update-changelog # generate CHANGES.md from PRs (uses OPENAPI_KEY for GPT summarization)
-uv run invoke release          # full PyPI release flow (maintainer-only); release triggers docs rebuild in materialsproject/pymatgen via repository_dispatch
 ```
+
+## Machine-generated files — do not edit by hand
+
+The following files are regenerated at release time by `invoke update-changelog` (see
+`tasks.py`) and must **not** be edited manually — hand-edits are overwritten or duplicated
+by the next release run:
+
+- `CHANGES.md` — release changelog, GPT-summarized from merged PR titles/bodies.
+- `COMPATIBILITY.md` — breaking-change log, assembled from PRs whose title starts with
+  `[breaking]` by copying their `## Breaking Changes` body section verbatim.
+
+To influence their content, edit the PR instead: for `COMPATIBILITY.md`, prefix the PR
+title with `[breaking]` and describe the change (plus migration steps) under
+`## Breaking Changes` in the PR body; describe the change in the PR body to steer the
+`CHANGES.md` summary. The package version is likewise derived from the exact `vYYYY.M.D`
+Git tag, not from any file (see Versioning & release).
 
 ## Cython extensions — important
 
@@ -81,4 +102,9 @@ Conventions enforced across the codebase:
 
 ## Versioning & release
 
-Version lives in `pyproject.toml` as a calver string (`YYYY.M.D`), kept in sync with the latest tag (`v<version>`). The `invoke set-ver`, `invoke update-changelog`, and `invoke release` tasks automate the bump → changelog → tag → PyPI flow. See `ADMIN.md` for the maintainer playbook.
+The package version is generated from an exact, clean `vYYYY.M.D` Git tag; do not set it in
+`pyproject.toml`. Tag the release commit, push the tag, then publish its GitHub Release to
+build and upload the sdist and wheels. `uv build` tests this locally without publishing.
+
+Unreleased or dirty builds get a development version based on the latest tag. See `ADMIN.md`
+for the maintainer playbook.

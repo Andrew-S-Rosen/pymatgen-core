@@ -77,8 +77,17 @@ class SiteOrderedIStructure(IStructure):
         return list(self.sites) == list(other.sites)
 
     def __hash__(self) -> int:
-        """Use the composition hash for now."""
-        return super().__hash__()
+        """Hash incorporating site positions to avoid LRU cache collisions.
+
+        The lru_cache on _get_reduced_istructure uses this hash as a key.
+        With a composition-only hash, structures sharing the same composition
+        all collide, requiring an O(N_sites) __eq__ call against each cached
+        entry to confirm a miss. Including rounded fractional coordinates means
+        each lookup requires fewer __eq__ calls.
+        """
+        species = tuple(site.species_string for site in self.sites)
+        coords = np.round(self.frac_coords, 3).tobytes()
+        return hash((super().__hash__(), species, coords))
 
 
 class AbstractComparator(MSONable, abc.ABC):
@@ -699,7 +708,9 @@ class StructureMatcher(MSONable):
             copied_structures.append(ss)
         return copied_structures
 
-    def _preprocess(self, struct1, struct2, niggli=True, skip_structure_reduction: bool = False):
+    def _preprocess(
+        self, struct1, struct2, niggli=True, skip_structure_reduction: bool = False
+    ) -> tuple[Structure, Structure, int, bool]:
         """
         Rescales, finds the reduced structures (primitive and niggli),
         and finds fu, the supercell size to make struct1 comparable to
@@ -829,7 +840,7 @@ class StructureMatcher(MSONable):
 
         return None
 
-    def group_structures(self, s_list, anonymous=False):
+    def group_structures(self, s_list, anonymous=False, symmetric=False):
         """
         Given a list of structures, use fit to group
         them by structural equality.
@@ -837,6 +848,13 @@ class StructureMatcher(MSONable):
         Args:
             s_list ([Structure]): List of structures to be grouped
             anonymous (bool): Whether to use anonymous mode.
+            symmetric (bool):
+                Whether a pair must match in both directions to be
+                grouped. Defaults to `False`. `fit()` is not symmetric
+                and the reference below is always passed as `struct1`,
+                so by default the grouping depends on the order of
+                `s_list`. Ignored if `anonymous` is `True`, since
+                `fit_anonymous` has no symmetric mode.
 
         Returns:
             A list of lists of matched structures
@@ -879,7 +897,7 @@ class StructureMatcher(MSONable):
                     )
                 else:
                     inds = filter(
-                        lambda i: self.fit(refs, unmatched[i][1], skip_structure_reduction=True),
+                        lambda i: self.fit(refs, unmatched[i][1], symmetric=symmetric, skip_structure_reduction=True),
                         list(range(len(unmatched))),
                     )
                 inds = list(inds)
@@ -1007,7 +1025,7 @@ class StructureMatcher(MSONable):
         if niggli:
             reduced = reduced.get_reduced_structure(reduction_algo="niggli")
         if primitive_cell:
-            reduced = reduced.get_primitive_structure()
+            reduced = cast("SiteOrderedIStructure", reduced.get_primitive_structure())
         return reduced
 
     @classmethod

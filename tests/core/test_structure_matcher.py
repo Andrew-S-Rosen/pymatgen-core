@@ -14,6 +14,7 @@ from pymatgen.core.structure_matcher import (
     FrameworkComparator,
     OccupancyComparator,
     OrderDisorderElementComparator,
+    SiteOrderedIStructure,
     StructureMatcher,
     get_linear_assignment_solution,
 )
@@ -534,6 +535,20 @@ class TestStructureMatcher(MatSciTest):
         assert sm_coarse.fit(struct2, struct1) is False
         assert sm_coarse.fit(struct1, struct2, symmetric=True) is False
         assert sm_coarse.fit(struct2, struct1, symmetric=True) is False
+
+    def test_group_structures_symmetric(self):
+        """
+        `fit()` is directional and `group_structures` always passes its
+        reference as `struct1`, so by default the grouping depends on the order
+        of `s_list`. `symmetric=True` removes this order-dependence."""
+        sm = StructureMatcher(comparator=ElementComparator(), ltol=0.6, stol=0.6, angle_tol=6)
+        struct1 = Structure.from_file(f"{VASP_IN_DIR}/POSCAR_fit_symm_s1")
+        struct2 = Structure.from_file(f"{VASP_IN_DIR}/POSCAR_fit_symm_s2")
+
+        assert len(sm.group_structures([struct1, struct2])) == 1
+        assert len(sm.group_structures([struct2, struct1])) == 2
+        assert len(sm.group_structures([struct1, struct2], symmetric=True)) == 2
+        assert len(sm.group_structures([struct2, struct1], symmetric=True)) == 2
 
     def test_oxi(self):
         """Test oxidation state removal matching."""
@@ -1060,3 +1075,27 @@ class TestStructureMatcher(MatSciTest):
         assert sm.fit(s1, s2) is False
         assert sm.fit_anonymous(s1, s2) is False
         assert sm.get_mapping(s1, s2) is None
+
+
+def test_site_ordered_istructure_hash_uses_coords() -> None:
+    """Same composition but different fractional coordinates must hash differently.
+
+    Guards against regressions that revert SiteOrderedIStructure.__hash__ to
+    composition-only, which would collapse all same-composition structures into
+    one lru_cache bucket and restore the O(N²) lookup cost.
+    """
+    base = Structure.from_file(f"{TEST_DIR}/Na2Fe2PNO4Se4.json")
+    s1 = SiteOrderedIStructure.from_sites(base)
+
+    shifted = base.copy()
+
+    assert hash(s1) == hash(SiteOrderedIStructure.from_sites(shifted))
+
+    frac_coords = base.frac_coords
+    frac_coords[0] = (frac_coords[0] + 0.05) % 1.0  # shift one site well beyond 1e-3 rounding tolerance
+    for site, fc in zip(shifted, frac_coords, strict=True):
+        site.frac_coords = fc
+    s2 = SiteOrderedIStructure.from_sites(shifted)
+
+    assert s1.composition == s2.composition
+    assert hash(s1) != hash(s2)

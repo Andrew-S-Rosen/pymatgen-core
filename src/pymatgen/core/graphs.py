@@ -16,7 +16,6 @@ from typing import TYPE_CHECKING, NamedTuple, cast
 import networkx as nx
 import networkx.algorithms.isomorphism as iso
 import numpy as np
-from monty.dev import deprecated
 from monty.json import MSONable
 from monty.serialization import loadfn
 from networkx.drawing.nx_agraph import write_dot
@@ -216,12 +215,6 @@ class StructureGraph(MSONable):
         return cls(structure, graph_data=graph_data)
 
     @classmethod
-    @deprecated(from_empty_graph, "Deprecated on 2024-03-29.", deadline=(2025, 3, 20))
-    def with_empty_graph(cls, *args, **kwargs):
-        """Deprecated method. Use from_empty_graph instead."""
-        return cls.from_empty_graph(*args, **kwargs)
-
-    @classmethod
     def from_edges(cls, structure: Structure, edges: dict) -> Self:
         """
         Constructor for MoleculeGraph, using pre-existing or pre-defined edges
@@ -276,12 +269,6 @@ class StructureGraph(MSONable):
         return struct_graph
 
     @classmethod
-    @deprecated(from_edges, "Deprecated on 2024-03-29.", deadline=(2025, 3, 20))
-    def with_edges(cls, *args, **kwargs):
-        """Deprecated method. Use from_edges instead."""
-        return cls.from_edges(*args, **kwargs)
-
-    @classmethod
     def from_local_env_strategy(
         cls,
         structure: Structure,
@@ -321,12 +308,6 @@ class StructureGraph(MSONable):
                 )
 
         return struct_graph
-
-    @classmethod
-    @deprecated(from_local_env_strategy, "Deprecated on 2024-03-29.", deadline=(2025, 3, 20))
-    def with_local_env_strategy(cls, *args, **kwargs):
-        """Deprecated method. Use from_local_env_strategy instead."""
-        return cls.from_local_env_strategy(*args, **kwargs)
 
     @property
     def name(self) -> str:
@@ -388,8 +369,8 @@ class StructureGraph(MSONable):
         # assumption simplifies logic later
         if not np.array_equal(from_jimage, (0, 0, 0)):
             shift = from_jimage
-            from_jimage = np.subtract(from_jimage, shift)
-            to_jimage = np.subtract(to_jimage, shift)
+            from_jimage = np.subtract(from_jimage, shift)  # type: ignore[assignment]
+            to_jimage = np.subtract(to_jimage, shift)  # type: ignore[assignment, arg-type]
 
         # automatic detection of to_jimage if user doesn't specify
         # will try and detect all equivalent images and add multiple
@@ -413,7 +394,7 @@ class StructureGraph(MSONable):
             )
             for nnsite in equiv_sites:
                 to_jimage = np.subtract(nnsite.frac_coords, self.structure[from_index].frac_coords)
-                to_jimage = np.round(to_jimage).astype(int)
+                to_jimage = np.round(to_jimage).astype(int)  # type: ignore[assignment]
                 self.add_edge(
                     from_index=from_index,
                     from_jimage=(0, 0, 0),
@@ -1659,13 +1640,7 @@ class MoleculeGraph(MSONable):
         return cls(molecule, graph_data=graph_data)
 
     @classmethod
-    @deprecated(from_empty_graph, "Deprecated on 2024-03-29.", deadline=(2025, 3, 20))
-    def with_empty_graph(cls, *args, **kwargs):
-        """Deprecated method. Use from_empty_graph instead."""
-        return cls.from_empty_graph(*args, **kwargs)
-
-    @classmethod
-    def from_edges(cls, molecule: Molecule, edges: dict[tuple[int, int], None | dict]) -> Self:
+    def from_edges(cls, molecule: Molecule, edges: dict[tuple[int, int], dict | None]) -> Self:
         """
         Constructor for MoleculeGraph, using pre-existing or pre-defined edges
         with optional edge parameters.
@@ -1707,12 +1682,6 @@ class MoleculeGraph(MSONable):
 
         mg.set_node_attributes()
         return mg
-
-    @classmethod
-    @deprecated(from_edges, "Deprecated on 2024-03-29.", deadline=(2025, 3, 20))
-    def with_edges(cls, *args, **kwargs):
-        """Deprecated method. Use from_edges instead."""
-        return cls.from_edges(*args, **kwargs)
 
     @classmethod
     def from_local_env_strategy(cls, molecule, strategy) -> Self:
@@ -1777,12 +1746,6 @@ class MoleculeGraph(MSONable):
 
         mg.set_node_attributes()
         return mg
-
-    @classmethod
-    @deprecated(from_local_env_strategy, "Deprecated on 2024-03-29.", deadline=(2025, 3, 20))
-    def with_local_env_strategy(cls, *args, **kwargs):
-        """Deprecated method. Use from_local_env_strategy instead."""
-        return cls.from_local_env_strategy(*args, **kwargs)
 
     @property
     def name(self):

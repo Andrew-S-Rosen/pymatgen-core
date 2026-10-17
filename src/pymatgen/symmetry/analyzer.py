@@ -41,7 +41,7 @@ if TYPE_CHECKING:
 
     from pymatgen.core import Element, IStructure, Species
     from pymatgen.core.sites import Site
-    from pymatgen.symmetry.groups import CrystalSystem
+    from pymatgen.symmetry.groups import CrystalFamily, CrystalSystem
     from pymatgen.util.typing import Kpoint
 
     LatticeType = Literal[
@@ -197,11 +197,8 @@ class SpacegroupAnalyzer:
         Returns:
             Pointgroup: Point group for structure.
         """
-        rotations = self._space_group_data.rotations
-        # passing a 0-length rotations list to spglib can segfault
-        if len(rotations) == 0:
-            return "1"
-        return spglib.get_pointgroup(rotations)[0].strip()  # type:ignore[index]
+        # determined by spglib from the space group type, and so is basis-independent:
+        return self._space_group_data.pointgroup
 
     def get_crystal_system(self) -> CrystalSystem:
         """Get the crystal system for the structure, e.g. (triclinic, orthorhombic,
@@ -211,7 +208,7 @@ class SpacegroupAnalyzer:
             ValueError: on invalid space group numbers < 1 or > 230.
 
         Returns:
-            str: Crystal system for structure
+            str: Crystal system of the structure.
         """
         n = self._space_group_data.number
 
@@ -219,7 +216,7 @@ class SpacegroupAnalyzer:
         if n != int(n) or not 0 < n < 231:
             raise ValueError(f"Received invalid space group {n}")
 
-        if 0 < n < 3:
+        if n < 3:
             return "triclinic"
         if n < 16:
             return "monoclinic"
@@ -233,22 +230,36 @@ class SpacegroupAnalyzer:
             return "hexagonal"
         return "cubic"
 
-    def get_lattice_type(self) -> LatticeType:
-        """Get the lattice for the structure, e.g. (triclinic, orthorhombic, cubic,
-        etc.).This is the same as the crystal system with the exception of the
-        hexagonal/rhombohedral lattice.
+    def get_crystal_family(self) -> CrystalFamily:
+        """Get the crystal family of the structure.
+
+        Equivalent to the crystal system, except for the trigonal system, which
+        is part of the hexagonal family.
 
         Raises:
             ValueError: on invalid space group numbers < 1 or > 230.
 
         Returns:
-            str: Lattice type for structure
+            str: Crystal family of the structure.
         """
-        spg_num = self._space_group_data.number
         system = self.get_crystal_system()
-        if spg_num in {146, 148, 155, 160, 161, 166, 167}:
-            return "rhombohedral"
         return "hexagonal" if system == "trigonal" else system
+
+    def get_lattice_type(self) -> LatticeType:
+        """Get the lattice for the structure, e.g. (triclinic, orthorhombic, cubic,
+        etc.). This is the same as the crystal family with the exception of the
+        rhombohedral trigonal cells.
+
+        Raises:
+            ValueError: on invalid space group numbers < 1 or > 230.
+
+        Returns:
+            str: Lattice type of the structure.
+        """
+        # R-centered trigonal cells are the rhombohedral lattice type
+        if self.get_space_group_symbol().startswith("R"):
+            return "rhombohedral"
+        return self.get_crystal_family()
 
     def get_pearson_symbol(self) -> str:
         """Get the Pearson symbol for the structure.
@@ -466,8 +477,8 @@ class SpacegroupAnalyzer:
         Args:
             mesh (3x1 array): The number of kpoint for the mesh needed in
                 each direction
-            is_shift (3x1 array): Whether to shift the kpoint grid. (1, 1,
-            1) means all points are shifted by 0.5, 0.5, 0.5.
+            is_shift (3x1 array): Whether to shift the kpoint grid. (1, 1, 1)
+                means all points are shifted by 0.5, 0.5, 0.5.
 
         Returns:
             A list of irreducible kpoints and their weights as a list of
@@ -493,8 +504,8 @@ class SpacegroupAnalyzer:
         Args:
             mesh (3x1 array): The number of kpoint for the mesh needed in
                 each direction
-            is_shift (3x1 array): Whether to shift the kpoint grid. (1, 1,
-            1) means all points are shifted by 0.5, 0.5, 0.5.
+            is_shift (3x1 array): Whether to shift the kpoint grid. (1, 1, 1)
+                means all points are shifted by 0.5, 0.5, 0.5.
 
         Returns:
             A tuple containing two numpy.ndarray. The first is the mesh in
@@ -511,47 +522,62 @@ class SpacegroupAnalyzer:
     @cite_conventional_cell_algo
     def get_conventional_to_primitive_transformation_matrix(
         self,
-        international_monoclinic: bool = True,
+        international_monoclinic: bool | None = None,
     ) -> NDArray:
         """Get the transformation matrix to transform a conventional unit cell to a
-        primitive cell according to certain standards the standards are defined in
+        primitive cell according to certain standards. The standards are defined in
         Setyawan, W., & Curtarolo, S. (2010). High-throughput electronic band structure
         calculations: Challenges and tools. Computational Materials Science, 49(2),
         299-312. doi:10.1016/j.commatsci.2010.05.010.
 
         Args:
-            international_monoclinic (bool): Whether to convert to proper international convention
-                such that beta is the non-right angle.
+            international_monoclinic (bool): Deprecated.
 
         Returns:
-            Transformation matrix to go from conventional to primitive cell
+            Transformation matrix to go from conventional to primitive cell.
+
+        Notes:
+            Note that for face-centered space groups (C-/A-centered), standardization to C-centering
+            is expected. Therefore, the transformation matrix C->P is returned.
+            All matrices have a positive determinant and therefore have no reflection component.
         """
-        conv = self.get_conventional_standard_structure(international_monoclinic=international_monoclinic)
-        lattice = self.get_lattice_type()
+        # TODO: Remove deprecated keyword once enough time passed
+        # Unused since 2026.7.16, deprecated after 2026.7.27
+        if international_monoclinic is not None:
+            warnings.warn(
+                "international_monoclinic has no effect, is deprecated and will be removed in a future version.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
 
-        if "P" in self.get_space_group_symbol() or lattice == "hexagonal":
-            return np.eye(3)
+        space_group = self.get_space_group_symbol()
 
-        if lattice == "rhombohedral":
-            # Check if the conventional representation is hexagonal or
-            # rhombohedral
-            lengths = conv.lattice.lengths
-            if abs(lengths[0] - lengths[2]) < 1e-4:
-                return np.eye(3)
-            return np.array([[-1, 1, 1], [2, 1, 1], [-1, -2, 1]], dtype=np.float64) / 3
+        if space_group.startswith("P"):
+            return np.eye(3, dtype=np.float64)
 
-        if "I" in self.get_space_group_symbol():
+        # Hexagonal to rhombohedral - for S/C orientation see get_primitive_standard_structure
+        # Matches spglib (transposed for row lattice vectors)
+        if space_group.startswith("R"):
+            return np.array([[2, 1, 1], [-1, 1, 1], [-1, -2, 1]], dtype=np.float64) / 3
+
+        # Setyawan/Curtarolo A.3/A.5/A.8
+        if space_group.startswith("I"):
             return np.array([[-1, 1, 1], [1, -1, 1], [1, 1, -1]], dtype=np.float64) / 2
 
-        if "F" in self.get_space_group_symbol():
+        # S/C A.2/A.7
+        if space_group.startswith("F"):
             return np.array([[0, 1, 1], [1, 0, 1], [1, 1, 0]], dtype=np.float64) / 2
 
-        if "C" in self.get_space_group_symbol() or "A" in self.get_space_group_symbol():
+        # Convert face-centered cell. Note that this converts a C-centered cell,
+        # A-centered cells must be standardized to them beforehand.
+        if space_group.startswith(("C", "A")):
+            # S/C A.13
             if self.get_crystal_system() == "monoclinic":
                 return np.array([[1, 1, 0], [-1, 1, 0], [0, 0, 2]], dtype=np.float64) / 2
+            # S/C A.2/A.9
             return np.array([[1, -1, 0], [1, 1, 0], [0, 0, 2]], dtype=np.float64) / 2
 
-        return np.eye(3)
+        raise ValueError(f"Unrecognized space group {space_group}.")
 
     @cite_conventional_cell_algo
     def get_primitive_standard_structure(
@@ -583,57 +609,50 @@ class SpacegroupAnalyzer:
             international_monoclinic=international_monoclinic,
             keep_site_properties=keep_site_properties,
         )
-        lattype = self.get_lattice_type()
 
-        if "P" in self.get_space_group_symbol() or lattype == "hexagonal":
+        sg_symbol = self.get_space_group_symbol()
+        if sg_symbol.startswith("P"):
             return conv
 
-        transf = self.get_conventional_to_primitive_transformation_matrix(
-            international_monoclinic=international_monoclinic
-        )
+        transf = self.get_conventional_to_primitive_transformation_matrix()
 
         new_sites: list[PeriodicSite] = []
-        lattice = Lattice(np.dot(transf, conv.lattice.matrix))
+        prim_lattice = Lattice(transf @ conv.lattice.matrix)
         for site in conv:
             new_s = PeriodicSite(
                 site.species,
                 site.coords,
-                lattice,
+                prim_lattice,
                 to_unit_cell=True,
                 coords_are_cartesian=True,
                 properties=site.properties,
             )
+            # Remove duplicate sites
             if not any(map(new_s.is_periodic_image, new_sites)):
                 new_sites.append(new_s)
 
-        if lattice == "rhombohedral":
-            prim = Structure.from_sites(new_sites)
-            lengths = prim.lattice.lengths
-            angles = prim.lattice.angles
-            a = lengths[0]
-            alpha = math.pi * angles[0] / 180
-            new_matrix = [
-                [a * cos(alpha / 2), -a * sin(alpha / 2), 0],
-                [a * cos(alpha / 2), a * sin(alpha / 2), 0],
-                [
-                    a * cos(alpha) / cos(alpha / 2),
-                    0,
-                    a * math.sqrt(1 - (cos(alpha) ** 2 / (cos(alpha / 2) ** 2))),
-                ],
-            ]
-            new_sites = []
-            lattice = Lattice(new_matrix)
-            for site in prim:
-                new_s = PeriodicSite(
-                    site.specie,
-                    site.frac_coords,
-                    lattice,
-                    to_unit_cell=True,
-                    properties=site.properties,
-                )
-                if not any(map(new_s.is_periodic_image, new_sites)):
-                    new_sites.append(new_s)
-            return Structure.from_sites(new_sites)
+        # Reorient rhombohedral lattices (keep sites & frac. coordinates)
+        # (to match Setyawan/Curtarolo convention in A.11)
+        if sg_symbol.startswith("R"):
+            a = prim_lattice.a
+            alpha = math.radians(prim_lattice.alpha)
+            cos_alpha = math.cos(alpha)
+            cos_alpha_h = math.cos(alpha / 2)
+            cos_fraction = cos_alpha / cos_alpha_h
+            a_sin_alpha_h = a * math.sin(alpha / 2)
+            new_matrix = (
+                (a * cos_alpha_h, -a_sin_alpha_h, 0.0),
+                (a * cos_alpha_h, a_sin_alpha_h, 0.0),
+                (
+                    a * cos_fraction,
+                    0.0,
+                    a * math.sqrt(1 - cos_fraction * cos_fraction),
+                ),
+            )
+            prim_lattice = Lattice(new_matrix)
+            # Edit the lattice in-place (sites are created above)
+            for site in new_sites:
+                site.lattice = prim_lattice
 
         return Structure.from_sites(new_sites)
 
@@ -653,7 +672,7 @@ class SpacegroupAnalyzer:
 
         Args:
             international_monoclinic (bool): Whether to convert to proper international convention
-                such that beta is the non-right angle.
+                such that beta is the non-right angle. Otherwise it will be alpha.
             keep_site_properties (bool): Whether to keep the input site properties (including
                 magnetic moments) on the sites that are still present after the refinement. Note:
                 This is disabled by default because the magnetic moments are not always directly
@@ -697,9 +716,8 @@ class SpacegroupAnalyzer:
                 for idx in range(2):
                     transf[idx][sorted_dic[idx]["orig_index"]] = 1
                 c = lattice.abc[2]
-            elif self.get_space_group_symbol().startswith(
-                "A"
-            ):  # change to C-centering to match Setyawan/Curtarolo convention
+            # change to C-centering to match Setyawan/Curtarolo convention
+            elif self.get_space_group_symbol().startswith("A"):
                 transf[2] = [1, 0, 0]
                 a, b = sorted(lattice.abc[1:])
                 sorted_dic = sorted(
@@ -741,10 +759,13 @@ class SpacegroupAnalyzer:
             # check first if we have the refined structure shows a rhombohedral
             # cell
             # if so, make a supercell
-            a, b, c = lattice.abc
-            if np.all(np.abs([a - b, c - b, a - c]) < 0.001):
+            if np.allclose(lattice.abc, lattice.a, atol=1e-3, rtol=0.0) and np.allclose(
+                lattice.angles, lattice.alpha, atol=1e-2, rtol=0.0
+            ):
                 struct.make_supercell(((1, -1, 0), (0, 1, -1), (1, 1, 1)))
                 a, b, c = sorted(struct.lattice.abc)
+            else:
+                a, b, c = lattice.abc
 
             if abs(b - c) < 0.001:
                 a, c = c, a
@@ -776,13 +797,13 @@ class SpacegroupAnalyzer:
                 b = sorted_dic[1]["length"]
                 c = lattice.abc[2]
                 new_matrix = None
-                for tp2 in itertools.permutations(list(range(2)), 2):
+                for tp2 in itertools.permutations(range(2), 2):
                     m = lattice.matrix
                     latt2 = Lattice([m[tp2[0]], m[tp2[1]], m[2]])
                     lengths = latt2.lengths
                     angles = latt2.angles
                     alpha_degrees = angles[0]
-                    if alpha_degrees == 90:
+                    if math.isclose(alpha_degrees, 90, rel_tol=0, abs_tol=1e-10):
                         continue
 
                     transf = np.zeros(shape=(3, 3))
@@ -800,7 +821,7 @@ class SpacegroupAnalyzer:
                         a, b, c = lengths
                         alpha_degrees = angles[0]
 
-                    alpha_radians = math.pi * alpha_degrees / 180
+                    alpha_radians = math.radians(alpha_degrees)
                     new_matrix = [
                         [a, 0, 0],
                         [0, b, 0],
@@ -820,10 +841,10 @@ class SpacegroupAnalyzer:
                 # keep the ones with the non-90 angle=alpha and b<c
                 new_matrix = None
 
-                for tp3 in itertools.permutations(list(range(3)), 3):
+                for tp3 in itertools.permutations(range(3), 3):
                     m = lattice.matrix
                     a, b, c, alpha, beta, gamma = Lattice([m[tp3[0]], m[tp3[1]], m[tp3[2]]]).parameters
-                    if alpha == 90 or b >= c:
+                    if math.isclose(alpha, 90, rel_tol=0, abs_tol=1e-10) or b >= c:
                         continue
                     transf = np.zeros(shape=(3, 3))
                     transf[2][tp3[2]] = 1
@@ -837,7 +858,7 @@ class SpacegroupAnalyzer:
                         transf[0][tp3[0]] = 1
                         transf[1][tp3[1]] = 1
 
-                    alpha = math.pi * alpha / 180
+                    alpha = math.radians(alpha)
                     new_matrix = [
                         [a, 0, 0],
                         [0, b, 0],
@@ -871,7 +892,7 @@ class SpacegroupAnalyzer:
             lattice = struct.lattice
 
             a, b, c = lattice.lengths
-            alpha, beta, gamma = (math.pi * i / 180 for i in lattice.angles)
+            alpha, beta, gamma = (math.radians(i) for i in lattice.angles)
             new_matrix = None
             test_matrix = [
                 [a, 0, 0],
@@ -950,7 +971,7 @@ class SpacegroupAnalyzer:
 
             lattice = Lattice(new_matrix)  # type:ignore[arg-type]
 
-        new_coords = np.dot(transf, np.transpose(struct.frac_coords)).T  # type: ignore[arg-type]
+        new_coords = struct.frac_coords @ transf.T  # type: ignore[arg-type]
         new_struct = Structure(
             lattice,
             struct.species_and_occu,
@@ -1159,8 +1180,8 @@ class PointGroupAnalyzer:
         unique_axis = self.principal_axes[ind]
         self._check_rot_sym(unique_axis)
         logger.debug(f"Rotation symmetries = {self.rot_sym}")
-        if len(self.rot_sym) > 0:
-            self._check_perpendicular_r2_axis(unique_axis)
+        # A perpendicular C2 can exist even when the unique axis carries none; that molecule is C2, not C1.
+        self._check_perpendicular_r2_axis(unique_axis)
 
         if len(self.rot_sym) >= 2:
             self._proc_dihedral()
@@ -1282,7 +1303,8 @@ class PointGroupAnalyzer:
         """
         min_set = self._get_smallest_set_not_on_axis(axis)
         max_sym = len(min_set)
-        for idx in range(max_sym, 0, -1):
+        # Stop at 2: a 360-degree rotation is the identity and is valid about any axis.
+        for idx in range(max_sym, 1, -1):
             if max_sym % idx != 0:
                 continue
             op = SymmOp.from_axis_angle_and_translation(axis, 360 / idx)
@@ -1292,7 +1314,7 @@ class PointGroupAnalyzer:
                 return idx
         return 1
 
-    def _check_perpendicular_r2_axis(self, axis: NDArray) -> None | Literal[True]:
+    def _check_perpendicular_r2_axis(self, axis: NDArray) -> Literal[True] | None:
         """Check for R2 axes perpendicular to unique axis.
 
         For handling symmetric top molecules.
@@ -1316,6 +1338,8 @@ class PointGroupAnalyzer:
         if len(self.rot_sym) == 0:
             logger.debug("Accidental spherical top!")
             self._proc_sym_top()
+            # It assigns sch_symbol itself, and rot_sym may still be empty afterwards.
+            return
         main_axis, rot = max(self.rot_sym, key=lambda v: v[1])
         if rot < 3:
             logger.debug("Accidental spherical top!")

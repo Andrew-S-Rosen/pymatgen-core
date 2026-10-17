@@ -237,7 +237,7 @@ class Dos(MSONable):
 
         return "\n".join(str_arr)
 
-    def get_densities(self, spin: Spin | None = None) -> None | NDArray:
+    def get_densities(self, spin: Spin | None = None) -> NDArray | None:
         """Get the DOS for a particular spin.
 
         Args:
@@ -465,6 +465,12 @@ class FermiDos(Dos, MSONable):
             self.energies[: self.idx_mid_gap] -= (bandgap - (ecbm - evbm)) / 2.0
             self.energies[self.idx_mid_gap :] += (bandgap - (ecbm - evbm)) / 2.0
 
+        # Precompute trapezoid integration weights folded with the DOS, so ``get_e_h_concs`` reduces to a
+        # dot product of these weights with Fermi-Dirac occupation factors (much faster):
+        ih, ie = self.idx_h_integration, self.idx_e_integration
+        self._h_weights = _trapezoid_weights(self.energies[:ih]) * self.tdos[:ih]
+        self._e_weights = _trapezoid_weights(self.energies[ie:]) * self.tdos[ie:]
+
     def get_e_h_concs(self, fermi_level: float, temperature: float) -> tuple[float, float]:
         """
         Get the electron and hole concentrations (in cm^-3) at a given Fermi
@@ -478,21 +484,18 @@ class FermiDos(Dos, MSONable):
             tuple[float, float]: The electron and hole concentrations in cm^-3.
         """
         scale = self.volume * self.A_to_cm**3
+        kbt = _constant("Boltzmann constant in eV/K") * temperature
         ih, ie = self.idx_h_integration, self.idx_e_integration
-        e_conc: float = (
-            trapezoid(  # use trapezoid rule for accurate DOS integration
-                self.tdos[ie:] * f0(self.energies[ie:], fermi_level, temperature),
-                x=self.energies[ie:],
-            )
-            / scale
-        )
-        h_conc: float = (
-            trapezoid(
-                self.tdos[:ih] * f0(-self.energies[:ih], -fermi_level, temperature),
-                x=self.energies[:ih],
-            )
-            / scale
-        )
+
+        # Fermi-Dirac distribution exponentially decays away from band edge / Fermi level, so truncate the
+        # integration at 40 k_BT from these bounds (< ~1e-10 - 1e-14 relative error, ~3-10x speedup)
+        i_max = max(int(np.searchsorted(self.energies, max(fermi_level, self.energies[self.idx_cbm]) + 40 * kbt)), ie)
+        i_min = min(int(np.searchsorted(self.energies, min(fermi_level, self.energies[self.idx_vbm]) - 40 * kbt)), ih)
+
+        # equivalent to trapezoid(tdos * f0, x=energies) over the (truncated) integration ranges,
+        # using precomputed weights ; expit(-x) = f0 = 1/(1+exp(x)):
+        e_conc: float = self._e_weights[: i_max - ie] @ expit(-(self.energies[ie:i_max] - fermi_level) / kbt) / scale
+        h_conc: float = self._h_weights[i_min:] @ expit((self.energies[i_min:ih] - fermi_level) / kbt) / scale
 
         return e_conc, h_conc
 
@@ -779,7 +782,7 @@ class CompleteDos(Dos):
                 for orb, pdos in atom_dos.items():
                     if orb in (Orbital.dxy, Orbital.dxz, Orbital.dyz):
                         t2g_dos.append(pdos)
-                    elif orb in (Orbital.dx2, Orbital.dz2):
+                    elif orb in (Orbital.dx2_y2, Orbital.dz2):
                         eg_dos.append(pdos)
         return {
             "t2g": Dos(self.efermi, self.energies, functools.reduce(add_densities, t2g_dos)),
@@ -1387,14 +1390,16 @@ class CompleteDos(Dos):
         for idx in range(len(dct["pdos"])):
             at = struct[idx]
             orb_dos = {}
+            # TODO(2027-08-17): Remove legacy "dx2" deserialization.
             for orb_str, odos in dct["pdos"][idx].items():
-                orb = Orbital[orb_str]
+                orb = Orbital["dx2_y2" if orb_str == "dx2" else orb_str]
                 orb_dos[orb] = {Spin(int(k)): v for k, v in odos["densities"].items()}
             pdoss[at] = orb_dos
         return cls(struct, tdos, pdoss)
 
     def as_dict(self) -> dict[str, Any]:
         """JSON-serializable dict representation of CompleteDos."""
+        # TODO(2027-08-17): Serialize canonical "dx2_y2" names instead of the legacy "dx2" key.
         dct = {
             "@module": type(self).__module__,
             "@class": type(self).__name__,
@@ -1408,7 +1413,8 @@ class CompleteDos(Dos):
             for at in self.structure:
                 dd = {}
                 for orb, pdos in self.pdos[at].items():
-                    dd[str(orb)] = {"densities": {str(int(spin)): list(dens) for spin, dens in pdos.items()}}  # type:ignore[arg-type]
+                    orb_name = "dx2" if orb is Orbital.dx2_y2 else str(orb)
+                    dd[orb_name] = {"densities": {str(int(spin)): list(dens) for spin, dens in pdos.items()}}  # type:ignore[arg-type]
                 dct["pdos"].append(dd)
             dct["atom_dos"] = {str(at): dos.as_dict() for at, dos in self.get_element_dos().items()}
             dct["spd_dos"] = {str(orb): dos.as_dict() for orb, dos in self.get_spd_dos().items()}
@@ -1483,7 +1489,7 @@ class LobsterCompleteDos(CompleteDos):
 
                     if orbital in (Orbital.dxy, Orbital.dxz, Orbital.dyz):
                         t2g_dos.append(pdos)
-                    elif orbital in (Orbital.dx2, Orbital.dz2):
+                    elif orbital in (Orbital.dx2_y2, Orbital.dz2):
                         eg_dos.append(pdos)
         return {
             "t2g": Dos(self.efermi, self.energies, functools.reduce(add_densities, t2g_dos)),
@@ -1584,6 +1590,20 @@ def f0(E: float | NDArray, fermi: float, T: float) -> float:
     """
     exponent = (E - fermi) / (_constant("Boltzmann constant in eV/K") * T)
     return expit(-exponent)  # scipy logistic sigmoid function; expit(x) = 1/(1+exp(-x))
+
+
+def _trapezoid_weights(x: NDArray) -> NDArray:
+    """
+    Get weights ``w(x)`` such that ``w(x) @ y == trapezoid(y, x=x)``
+    for any ``y`` on the fixed grid ``x``.
+    """
+    weights = np.zeros_like(x)  # same shape as ``x``
+    if len(x) > 1:
+        dx = np.diff(x)
+        weights[0] = dx[0] / 2
+        weights[-1] = dx[-1] / 2
+        weights[1:-1] = (dx[:-1] + dx[1:]) / 2  # trapezoid weights
+    return weights
 
 
 def _get_orb_type_lobster(orb: str) -> OrbitalType | None:

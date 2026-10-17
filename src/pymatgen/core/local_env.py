@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Literal, NamedTuple, cast, get_args, overload
 
 import numpy as np
 import orjson
-from monty.dev import deprecated, requires
+from monty.dev import requires
 from monty.serialization import loadfn
 from ruamel.yaml import YAML
 from scipy.spatial import Voronoi
@@ -70,7 +70,7 @@ class ValenceIonicRadiusEvaluator:
     analyzer.
     """
 
-    def __init__(self, structure: Structure) -> None:
+    def __init__(self, structure: IStructure) -> None:
         """Initialize a ValenceIonicRadiusEvaluator.
 
         Args:
@@ -223,8 +223,7 @@ def _handle_disorder(structure: Structure, on_disorder: on_disorder_options):
     # As a workaround, we create a new structure with majority species on each site.
     structure = structure.copy()  # make a copy so we don't mutate the original structure
     for idx, site in enumerate(structure):
-        max_specie = max(site.species, key=site.species.get)
-        max_val = site.species[max_specie]
+        max_specie, max_val = max(site.species.items(), key=lambda item: item[1])
         if max_val <= 0.5:
             if on_disorder == "take_majority_strict":
                 raise ValueError(
@@ -845,16 +844,16 @@ class VoronoiNN(NearNeighbors):
             indices.extend([(x[2],) + x[3] for x in neighs])
 
         # Get the non-duplicates (using the site indices for numerical stability)
-        indices = np.array(indices, dtype=np.int64)
-        indices, uniq_inds = np.unique(indices, return_index=True, axis=0)
+        indices_arr = np.array(indices, dtype=np.int64)
+        indices_arr, uniq_inds = np.unique(indices_arr, return_index=True, axis=0)
         sites = [sites[idx] for idx in uniq_inds]
 
         # Sort array such that atoms in the root image are first
         # Exploit the fact that the array is sorted by the unique operation such that
         # the images associated with atom 0 are first, followed by atom 1, etc.
-        (root_images,) = np.nonzero(np.abs(indices[:, 1:]).max(axis=1) == 0)  # type: ignore[call-overload]
+        (root_images,) = np.nonzero(np.abs(indices_arr[:, 1:]).max(axis=1) == 0)  # type: ignore[call-overload]
 
-        del indices  # Save memory (tessellations can be costly)
+        del indices_arr  # Save memory (tessellations can be costly)
 
         # Run the tessellation
         qvoronoi_input = [s.coords for s in sites if s is not None]
@@ -1518,7 +1517,7 @@ class OpenBabelNN(NearNeighbors):
 
         return siw
 
-    def get_bonded_structure(self, structure: Structure, decorate: bool = False) -> StructureGraph:
+    def get_bonded_structure(self, structure: Structure, decorate: bool = False) -> MoleculeGraph:
         """
         Obtain a MoleculeGraph object using this NearNeighbor
         class. Requires the optional dependency networkx
@@ -2934,7 +2933,7 @@ class LocalStructOrderParams:
         # Prepare angle calculations, if applicable.
         rij: list[np.ndarray] = []
         rjk: list[list[np.ndarray]] = []
-        rij_norm: list[list[float]] = []
+        rij_norm: list[np.ndarray] = []
         rjknorm: list[list[np.ndarray]] = []
         dist: list[float] = []
         distjk_unique: list[float] = []
@@ -3159,7 +3158,7 @@ class LocalStructOrderParams:
                                     flag_xtwoaxis = False
                                     if self._comp_azi:
                                         phi2 = math.atan2(
-                                            np.dot(xtwoaxis, yaxis),
+                                            np.dot(xtwoaxis, cast("np.ndarray", yaxis)),
                                             np.dot(xtwoaxis, xaxis),
                                         )
                                 # South pole contributions of m.
@@ -3515,11 +3514,6 @@ class BrunnerNNReciprocal(NearNeighbors):
         return siw
 
 
-@deprecated(BrunnerNNReciprocal, "Deprecated on 2024-03-29.", deadline=(2025, 3, 29))
-class BrunnerNN_reciprocal(BrunnerNNReciprocal):
-    """Deprecated alias for BrunnerNNReciprocal."""
-
-
 class BrunnerNNRelative(NearNeighbors):
     """
     Determine coordination number using Brunner's algorithm which counts the
@@ -3592,11 +3586,6 @@ class BrunnerNNRelative(NearNeighbors):
         return siw
 
 
-@deprecated(BrunnerNNRelative, "Deprecated on 2024-03-29.", deadline=(2025, 3, 29))
-class BrunnerNN_relative(BrunnerNNRelative):
-    """Deprecated alias for BrunnerNNRelative."""
-
-
 class BrunnerNNReal(NearNeighbors):
     """
     Determine coordination number using Brunner's algorithm which counts the
@@ -3667,11 +3656,6 @@ class BrunnerNNReal(NearNeighbors):
                     }
                 )
         return siw
-
-
-@deprecated(BrunnerNNReal, "Deprecated on 2024-03-29.", deadline=(2025, 3, 29))
-class BrunnerNN_real(BrunnerNNReal):
-    """Deprecated alias for BrunnerNNReal."""
 
 
 class EconNN(NearNeighbors):

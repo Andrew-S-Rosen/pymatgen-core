@@ -114,7 +114,7 @@ class XYZ:
         with zopen(filename, mode="rt", encoding="utf-8") as file:
             return cls.from_str(file.read())  # type:ignore[arg-type]
 
-    def as_dataframe(self):
+    def as_dataframe(self) -> pd.DataFrame:
         """Generate a coordinates data frame with columns: atom, x, y, and z
         In case of multiple frame XYZ, returns the last frame.
 
@@ -134,14 +134,16 @@ class XYZ:
         df_xyz.index += 1
         return df_xyz
 
-    def _frame_str(self, frame_mol):
+    def _frame_str(self, frame_mol: SiteCollection) -> str:
+        if not frame_mol.is_ordered:
+            raise ValueError("xyz only supports ordered sites.")
         output = [str(len(frame_mol)), frame_mol.formula]
         prec = self.precision
         fmt = f"{{}} {{:.{prec}f}} {{:.{prec}f}} {{:.{prec}f}}"
         output.extend(fmt.format(site.specie, site.x, site.y, site.z) for site in frame_mol)
         return "\n".join(output)
 
-    def __str__(self):
+    def __str__(self) -> str:
         return "\n".join(self._frame_str(mol) for mol in self._mols)
 
     def write_file(self, filename: str) -> None:
@@ -152,3 +154,39 @@ class XYZ:
         """
         with zopen(filename, mode="wt", encoding="utf-8") as file:
             file.write(str(self))  # type:ignore[arg-type]
+
+
+# ----------------------------------------------------------------------------
+# pymatgen.io.registry plugin: Molecule <-> XYZ
+# ----------------------------------------------------------------------------
+
+
+def _xyz_read_str(input_string: str, **kwargs):
+    from pymatgen.io.registry import filter_kwargs
+
+    return XYZ.from_str(input_string, **filter_kwargs(XYZ.from_str, kwargs)).molecule
+
+
+def _xyz_write_str(molecule, **kwargs) -> str:
+    return str(XYZ(molecule, **kwargs))
+
+
+def _xyz_write_file(molecule, filename, **kwargs) -> None:
+    XYZ(molecule, **kwargs).write_file(filename)
+
+
+def _register_formats() -> None:
+    from pymatgen.io.registry import MoleculeFormat, register_molecule_format
+
+    register_molecule_format(
+        MoleculeFormat(
+            name="xyz",
+            patterns=("*.xyz*",),
+            read_str=_xyz_read_str,
+            write_str=_xyz_write_str,
+            write_file=_xyz_write_file,
+        )
+    )
+
+
+_register_formats()

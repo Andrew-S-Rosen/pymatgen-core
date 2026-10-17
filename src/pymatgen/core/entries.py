@@ -30,7 +30,6 @@ from typing import TYPE_CHECKING, cast
 import numpy as np
 import orjson
 from monty.json import MontyDecoder, MontyEncoder, MSONable
-from uncertainties import ufloat
 
 from pymatgen.core.structure_matcher import SpeciesComparator, StructureMatcher
 
@@ -147,7 +146,7 @@ class Entry(MSONable, ABC):
         new_entry_dict["composition"] = new_composition.as_dict()
         new_entry_dict["energy"] = new_energy
 
-        return self.from_dict(new_entry_dict)
+        return cast("Entry", self.from_dict(new_entry_dict))
 
     def _normalization_factor(self, mode: Literal["formula_unit", "atom"] = "formula_unit") -> float:
         # NOTE here we use composition rather than _composition in order to ensure
@@ -511,11 +510,7 @@ class ComputedEntry(Entry):
     @property
     def correction(self) -> float:
         """The total energy correction / adjustment applied to the entry in eV."""
-        # either sum of adjustments or ufloat with nan std_dev, so that no corrections still result in ufloat object:
-        corr = sum(ufloat(ea.value, ea.uncertainty) for ea in self.energy_adjustments if ea.value) or ufloat(
-            0.0, np.nan
-        )
-        return corr.nominal_value
+        return math.fsum(ea.value for ea in self.energy_adjustments)
 
     @correction.setter
     def correction(self, x: float) -> None:
@@ -530,16 +525,13 @@ class ComputedEntry(Entry):
     @property
     def correction_uncertainty(self) -> float:
         """The uncertainty of the energy adjustments applied to the entry in eV."""
-        # either sum of adjustments or ufloat with nan std_dev, so that no corrections still result in ufloat object:
-        unc = sum(
-            (ufloat(ea.value, ea.uncertainty) if not np.isnan(ea.uncertainty) and ea.value else ufloat(ea.value, 0))
-            for ea in self.energy_adjustments
-        ) or ufloat(0.0, np.nan)
-
-        if not math.isclose(unc.nominal_value, 0) and math.isclose(unc.std_dev, 0):
-            return np.nan
-
-        return unc.std_dev
+        # Quadrature sum of the (independent) adjustment uncertainties, skipping unknown (nan) ones and those of
+        # zero-valued adjustments:
+        quad_sum = math.hypot(
+            *(ea.uncertainty for ea in self.energy_adjustments if ea.value and not np.isnan(ea.uncertainty))
+        )
+        # A total of zero means no uncertainty information supplied, so return nan rather than implying exact certainty:
+        return quad_sum or np.nan
 
     @property
     def correction_uncertainty_per_atom(self) -> float:
@@ -814,12 +806,9 @@ class ComputedStructureEntry(ComputedEntry):
             stacklevel=2,
         )
         # TODO: find a better solution for creating copies instead of as/from dict
-        factor = self._normalization_factor(mode)
         dct = super().normalize(mode).as_dict()
         dct["structure"] = self.structure.as_dict()
-        entry = self.from_dict(dct)
-        entry._composition /= factor
-        return entry
+        return self.from_dict(dct)
 
     def copy(self) -> ComputedStructureEntry:
         """Get a copy of the ComputedStructureEntry."""
@@ -1110,7 +1099,7 @@ class EntrySet(collections.abc.MutableSet, MSONable):
         for entry in self.entries:
             els.update(entry.elements)
         elements = sorted(els, key=lambda a: a.X)
-        with open(filename, mode="w", encoding="utf-8") as file:
+        with open(filename, mode="w", encoding="utf-8", newline="") as file:
             writer = csv.writer(
                 file,
                 delimiter=",",
@@ -1136,7 +1125,7 @@ class EntrySet(collections.abc.MutableSet, MSONable):
         """
         from pymatgen.analysis.phase_diagram import PDEntry
 
-        with open(filename, encoding="utf-8") as file:
+        with open(filename, encoding="utf-8", newline="") as file:
             reader = csv.reader(file, delimiter=",", quotechar='"', quoting=csv.QUOTE_MINIMAL)
             entries = []
             header_read = False

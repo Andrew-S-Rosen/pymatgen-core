@@ -192,6 +192,9 @@ class TestBSPlotterProjected:
         with open(f"{TEST_FILES_DIR}/electronic_structure/boltztrap2/PbTe_bandstructure.json", "rb") as file:
             self.bs_PbTe = BandStructureSymmLine.from_dict(orjson.loads(file.read()))
 
+    def test_orbitals_sum_orbitals_without_sum_morbs(self):
+        assert self.plotter_Cu2O._Orbitals_SumOrbitals({"Cu": ["dxy"]}, None) == ({"Cu": ["dxy"]}, None)
+
     def test_methods(self):
         # Minimal baseline testing for get_plot. not a true test. Just checks that
         # it can actually execute.
@@ -201,13 +204,36 @@ class TestBSPlotterProjected:
         assert len(axes) == 4, f"{len(axes)=}"
         assert len(axes[0].get_lines()) == 4903, f"{len(axes[0].get_lines())=}"
         assert len(axes[-1].get_lines()) == 0, f"{len(axes[-1].get_lines())=}"
-        ax = self.plotter_Cu2O.get_projected_plots_dots_patom_pmorb(
+
+        # Test if a plot with a single column works
+        axes = self.plotter_Cu2O.get_projected_plots_dots({"Cu": ["d", "s"]})
+        assert len(axes) == 2, f"{len(axes)=}"
+        assert len(axes[0].get_lines()) == 4903, f"{len(axes[0].get_lines())=}"
+        assert len(axes[-1].get_lines()) == 4903, f"{len(axes[-1].get_lines())=}"
+
+        # Test if a plot with a single row works
+        axes = self.plotter_Cu2O.get_projected_plots_dots({"Cu": ["d"], "O": ["p"]})
+        assert len(axes) == 2, f"{len(axes)=}"
+        assert len(axes[0].get_lines()) == 4903, f"{len(axes[0].get_lines())=}"
+        assert len(axes[-1].get_lines()) == 4903, f"{len(axes[-1].get_lines())=}"
+
+        axs = self.plotter_Cu2O.get_projected_plots_dots_patom_pmorb(
             {"Cu": ["dxy", "s", "px"], "O": ["px", "py", "pz"]},
             {"Cu": [3, 5], "O": [1]},
         )
-        assert isinstance(ax, plt.Axes)
-        assert len(ax.get_lines()) == 44_127
-        assert ax.get_ylim() == approx((-4.0, 4.5047))
+        assert isinstance(axs, list)
+        assert isinstance(axs[0], plt.Axes)
+        assert len(axs) == 9
+        assert len(axs[0].get_lines()) == 4903
+        assert axs[0].get_ylim() == approx((-4.0, 4.5047))
+
+        # Test if num_column other than 2 works correctly
+        axs_col = self.plotter_Cu2O.get_projected_plots_dots_patom_pmorb(
+            {"Cu": ["dxy", "s", "px"], "O": ["px", "py", "pz"]}, {"Cu": [3, 5], "O": [1]}, num_column=3
+        )
+        axs_spec = axs_col[2].get_subplotspec()
+        assert axs_spec.rowspan.start == 0
+        assert axs_spec.colspan.start == 2
 
         with pytest.raises(
             ValueError,

@@ -2,7 +2,7 @@
 # invoke ``tasks.py``, and the ``dev/`` directory of local helpers /
 # reproducers (not part of the installed package; lint debt there is out
 # of scope for the regular pre-commit pipeline).
-exclude: ^(docs|.*test_files|tasks\.py|dev/)
+exclude: ^(docs|.*test[_-]files|tasks\.py|dev/)
 
 # Install both pre-commit and commit-msg hook types when contributors run
 # ``pre-commit install`` — required for codespell's ``commit-msg`` stage
@@ -18,7 +18,7 @@ ci:
 
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.15.12
+    rev: v0.16.0
     hooks:
       # ``ruff-check`` is the modern hook id; ``id: ruff`` is the legacy
       # alias and prints a "ruff (legacy alias)" warning every run.
@@ -39,7 +39,7 @@ repos:
       - id: trailing-whitespace
 
   - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v2.0.0
+    rev: v2.3.0
     hooks:
       - id: mypy
         # Run mypy on the whole package once per hook invocation rather
@@ -54,16 +54,18 @@ repos:
         exclude: ^(examples|tests)/
 
   - repo: https://github.com/codespell-project/codespell
-    rev: v2.4.2
+    rev: v2.4.3
     hooks:
       - id: codespell
         stages: [pre-commit, commit-msg]
         exclude_types: [html]
         args: [--check-filenames]
-        exclude: ^pretrained_models/.*/model\.json$
+        # CHANGES.md quotes historical PR titles verbatim (typos included),
+        # so spell-checking it only flags text we can't meaningfully fix.
+        exclude: ^(pretrained_models/.*/model\.json|CHANGES\.md)$
 
   - repo: https://github.com/MarcoGorelli/cython-lint
-    rev: v0.19.0
+    rev: v0.21.0
     hooks:
       - id: cython-lint
         args: [--no-pycodestyle]

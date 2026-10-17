@@ -13,7 +13,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, ClassVar
 
 import numpy as np
-from monty.dev import deprecated
 
 if TYPE_CHECKING:
     from typing import Any
@@ -307,7 +306,7 @@ class JDFTXOutfileSlice:
     vibrational_modes: list[dict[str, Any]] | None = None
     vibrational_energy_components: dict[str, float] | None = None
 
-    def _get_mu(self) -> None | float:
+    def _get_mu(self) -> float | None:
         """Sets mu from most recent JOutStructure. (Equivalent to efermi)"""
         _mu = None
         if self.jstrucs is not None:
@@ -1294,10 +1293,6 @@ class JDFTXOutfileSlice:
             else:
                 dct[fld] = value
         return dct
-
-    @deprecated(as_dict, deadline=(2025, 10, 4))
-    def to_dict(self):
-        return self.as_dict()
 
     # TODO: Re-do this now that there are no properties
     def __repr__(self) -> str:

@@ -6,6 +6,16 @@ makestr.x available in the path. Please download the library at
 https://github.com/msg-byu/enumlib and follow the instructions in the README to
 compile these two executables accordingly.
 
+Alternatively, ``enum.x`` and ``makestr.x`` can be provided by Enumlib.jl
+(https://github.com/glwhart/Enumlib.jl), a from-scratch Julia reimplementation of
+enumlib by one of its authors. It is a drop-in replacement: the
+``struct_enum.in`` / ``struct_enum.out`` file contract is unchanged. Note that
+Enumlib.jl's ``makestr.x`` strictly validates that the site coordinates in
+``struct_enum.out`` are consistent with the space group it rederives, which the
+legacy Fortran tools did not; this module therefore writes symmetry-idealized
+coordinates to ``struct_enum.in``. This module's own test suite passes against
+both engines.
+
 If you use this module, please cite:
 
     - Gus L. W. Hart and Rodney W. Forcade, "Algorithm for generating derivative
@@ -26,11 +36,13 @@ If you use this module, please cite:
 from __future__ import annotations
 
 import fractions
+import functools
 import itertools
 import logging
 import math
 import re
 import subprocess
+import warnings
 from glob import glob
 from shutil import which
 from typing import TYPE_CHECKING
@@ -54,6 +66,61 @@ logger = logging.getLogger(__name__)
 ENUM_CMD = which("enum.x") or which("multienum.x")
 # Prefer makestr.x at present
 MAKESTR_CMD = which("makestr.x") or which("makeStr.x") or which("makeStr.py")
+
+
+@functools.cache
+def _is_enumlib_jl(enum_cmd: str | None) -> bool:
+    """Detect whether the resolved enum.x is the Julia Enumlib.jl engine.
+
+    Enumlib.jl responds to ``enum.x --version`` by printing a line containing
+    the token ``Enumlib.jl`` (e.g. ``enum.x (Enumlib.jl) 0.3.2``). The legacy
+    Fortran enum.x does not support ``--version``. The probe is cached so the
+    subprocess is spawned at most once per process per command path, and it
+    never raises: any failure is treated as "not Enumlib.jl".
+
+    Args:
+        enum_cmd (str | None): Resolved path to the enum.x executable.
+
+    Returns:
+        bool: True iff the executable identifies itself as Enumlib.jl.
+    """
+    if not enum_cmd:
+        return False
+    try:
+        proc = subprocess.run(
+            [enum_cmd, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        return "Enumlib.jl" in (proc.stdout or "") + (proc.stderr or "")
+    except Exception:
+        # Never let the version probe crash enumeration: any failure
+        # (FileNotFoundError, subprocess.TimeoutExpired, OSError, ...) simply
+        # means we cannot confirm the Julia engine.
+        return False
+
+
+def _warn_if_not_enumlib_jl(enum_cmd: str | None) -> None:
+    """Advise switching to Enumlib.jl when the legacy Fortran enum.x is used.
+
+    Purely advisory: this never raises or changes enumeration behavior. The
+    underlying probe is cached, so the subprocess runs at most once per command
+    path; how often the warning itself is shown is up to the active warning
+    filters (Python's default filter shows it once per call site).
+
+    Args:
+        enum_cmd (str | None): Resolved path to the enum.x executable.
+    """
+    if enum_cmd and not _is_enumlib_jl(enum_cmd):
+        warnings.warn(
+            "You appear to be using the legacy Fortran 'enum.x'. Consider installing "
+            "Enumlib.jl (https://github.com/glwhart/Enumlib.jl), a faster, "
+            "better-maintained drop-in replacement for enumlib.",
+            UserWarning,
+            stacklevel=2,
+        )
 
 
 @requires(
@@ -128,6 +195,11 @@ class EnumlibAdaptor:
         self.check_ordered_symmetry = check_ordered_symmetry
         self.timeout = timeout
 
+        # Recommend the faster, better-maintained Enumlib.jl when the legacy
+        # Fortran enum.x is detected. Advisory only; the version probe behind
+        # this is cached, so repeated instantiation costs no extra subprocesses.
+        _warn_if_not_enumlib_jl(ENUM_CMD)
+
     def run(self) -> None:
         """Run the enumeration."""
         # Work in a temporary directory
@@ -145,13 +217,49 @@ class EnumlibAdaptor:
             else:
                 raise EnumError("Unable to enumerate structure.")
 
+    def _idealize_coords(self, structure: Structure | IStructure) -> Structure:
+        """Project fractional coordinates onto ideal symmetry positions.
+
+        Coordinates of sites in the same crystallographic orbit (determined at
+        ``self.symm_prec``) are group-averaged over all their space-group
+        images, which makes them exactly invariant under the detected
+        symmetry operations. The input file generated for enumlib declares
+        sites as symmetry-equivalent orbits, so the coordinates written must
+        actually obey that symmetry: relaxed structures typically break it by
+        ~1e-4 Angstrom, which Enumlib.jl's makestr.x rejects during its
+        internal symmetry consistency check.
+
+        Args:
+            structure (Structure | IStructure): Input structure.
+
+        Returns:
+            Structure: Copy of the structure with idealized fractional coords.
+        """
+        spga = SpacegroupAnalyzer(structure, self.symm_prec)
+        ops = spga.get_symmetry_operations()
+        sym_struct = spga.get_symmetrized_structure()
+        frac_coords = np.array(structure.frac_coords)
+        idealized = Structure.from_sites(structure.sites)
+        for orbit in sym_struct.equivalent_indices:
+            orbit_coords = frac_coords[orbit]
+            images = np.concatenate([op.operate_multi(orbit_coords) for op in ops])
+            # Assign every image to the nearest orbit site under the
+            # minimum-image convention, then average the images per site.
+            delta = images[:, None, :] - orbit_coords[None, :, :]
+            delta -= np.round(delta)
+            nearest = np.linalg.norm(delta, axis=2).argmin(axis=1)
+            for k, site_idx in enumerate(orbit):
+                idealized[site_idx].frac_coords = orbit_coords[k] + delta[nearest == k, k].mean(axis=0)
+        return idealized
+
     def _gen_input_file(self) -> None:
         """Generate the necessary struct_enum.in file for enumlib. See enumlib
         documentation for details.
         """
         coord_format = "{:.6f} {:.6f} {:.6f}"
         # Use symmetry finder to get the symmetrically distinct sites
-        fitter = SpacegroupAnalyzer(self.structure, self.symm_prec)
+        structure = self._idealize_coords(self.structure)
+        fitter = SpacegroupAnalyzer(structure, self.symm_prec)
         symmetrized_structure = fitter.get_symmetrized_structure()
         logger.debug(
             f"Spacegroup {fitter.get_space_group_symbol()} ({fitter.get_space_group_number()}) "
@@ -326,6 +434,7 @@ class EnumlibAdaptor:
             [MAKESTR_CMD, *options],
             stdout=subprocess.PIPE,
             stdin=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             close_fds=True,
         ) as rs:
             _stdout, stderr = rs.communicate()
@@ -402,6 +511,12 @@ class EnumlibAdaptor:
                     else:
                         logger.debug("Skipping sites that include species X.")
                 structs.append(Structure.from_sites(sorted(sites)))  # type:ignore[arg-type]
+
+        if len(structs) != num_structs:
+            raise EnumError(
+                f"{MAKESTR_CMD} produced {len(structs)} of the {num_structs} structures reported by "
+                f"enumeration. Error output: {stderr.decode().strip() if stderr else '(none)'}"
+            )
 
         logger.debug(f"Read in a total of {num_structs} structures.")
         return structs

@@ -1215,11 +1215,6 @@ class VaspInputSet(InputGenerator, abc.ABC):
 VaspInputGenerator = VaspInputSet
 
 
-@deprecated(VaspInputSet, deadline=(2025, 12, 31))
-class DictSet(VaspInputSet):
-    """Alias for VaspInputSet."""
-
-
 # Helper functions to determine valid FFT grids for VASP
 def next_num_with_prime_factors(n: int, max_prime_factor: int, must_inc_2: bool = True) -> int:
     """Get the next number greater than or equal to n that only has the desired prime factors.
@@ -1735,6 +1730,34 @@ class MatPESStaticSet(VaspInputSet):
             self._config_dict["INCAR"].pop("GGA", None)
         if self.xc_functional.upper().endswith("+U"):
             self._config_dict["INCAR"]["LDAU"] = True
+
+
+@dataclass
+class MatPESRelaxSet(MatPESStaticSet):
+    """Create input files for a MatPES relaxation calculation.
+
+    This uses the same settings as MatPESStaticSet (see its docstring for details) but
+    performs a full relaxation of both ionic positions and cell (ISIF=3) with a
+    force-based convergence criterion, consistent with the emphasis of MatPES on
+    accurate forces.
+
+    Args:
+        structure (Structure): The Structure to create inputs for. If None, the input
+            set is initialized without a Structure but one must be set separately before
+            the inputs are generated.
+        xc_functional ('R2SCAN'|'PBE'): Exchange-correlation functional to use. Defaults to 'PBE'.
+        **kwargs: Keywords supported by VaspInputSet.
+    """
+
+    @property
+    def incar_updates(self) -> dict[str, Any]:
+        """Updates to the INCAR config for this calculation type."""
+        return {
+            "EDIFFG": -0.02,
+            "IBRION": 2,
+            "ISIF": 3,
+            "NSW": 99,
+        }
 
 
 @dataclass
@@ -2475,7 +2498,6 @@ class MVLSlabSet(VaspInputSet):
         updates = {
             "EDIFF": 1e-5,
             "EDIFFG": -0.05,
-            "ENAUG": 4000,
             "IBRION": 1,
             "POTIM": 1.0,
             "LDAU": ldau,

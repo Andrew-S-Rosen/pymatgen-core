@@ -658,7 +658,7 @@ class TestIncar(MatSciTest):
         assert float(incar["EDIFF"]) == approx(1e-4), "Wrong EDIFF"
         assert isinstance(incar["LORBIT"], int)
 
-    def test_lattice_constaints(self):
+    def test_lattice_constraints_and_ROPT(self):
         incar_str = """
         ALGO = Fast
 EDIFF = 0.00045000000000000004
@@ -676,9 +676,16 @@ MAGMOM = 9*0.6
 NELM = 100
 NSW = 99
 PREC = Accurate
+ROPT = 1e-3 1e-3
 SIGMA = 0.05"""
         incar = Incar.from_str(incar_str)
         assert incar["LATTICE_CONSTRAINTS"] == [False, False, True]
+        assert incar["ROPT"] == [1e-3, 1e-3]
+        assert incar["MAGMOM"] == [0.6] * 9
+        assert incar["PREC"] == "Accurate"
+
+        incar = Incar.from_str("ROPT = 2*1e-3")
+        assert incar["ROPT"] == [1e-3, 1e-3]
 
     def test_check_for_duplicate(self):
         incar_str: str = """encut = 400
@@ -1750,6 +1757,19 @@ class TestPotcarSingle:
         )
         assert repr(self.psingle_Mn_pv) == expected_repr
 
+    def test_parse_crlf_data(self):
+        """POTCAR text with CRLF line endings (e.g. read in binary mode on
+        Windows, or unpacked from an archive without newline normalization)
+        should parse to the same keywords and summary stats as the LF version.
+        Regression test: the body split used to hardcode a "\\n" delimiter and
+        raised IndexError on such data.
+        """
+        crlf_data = self.psingle_Mn_pv.data.replace("\n", "\r\n")
+        psingle_crlf = PotcarSingle(crlf_data)
+        assert psingle_crlf.is_valid
+        assert psingle_crlf.keywords == self.psingle_Mn_pv.keywords
+        assert psingle_crlf._summary_stats == self.psingle_Mn_pv._summary_stats
+
     def test_eq(self):
         assert self.psingle_Mn_pv == self.psingle_Mn_pv
         assert self.psingle_Fe == self.psingle_Fe
@@ -1836,15 +1856,16 @@ class TestPotcar(MatSciTest):
         assert self.potcar.symbols == ["Fe_pv", "O"]
         assert self.potcar[0].nelectrons == 14
 
-    @pytest.mark.xfail(reason="TODO: need someone to fix this")
     def test_default_functional(self):
-        potcar = Potcar(["Fe", "P"])
-        assert potcar[0].functional_class == "GGA"
-        assert potcar[1].functional_class == "GGA"
-        SETTINGS["PMG_DEFAULT_FUNCTIONAL"] = "LDA"
-        potcar = Potcar(["Fe", "P"])
-        assert potcar[0].functional_class == "LDA"
-        assert potcar[1].functional_class == "LDA"
+        with patch.dict(SETTINGS, PMG_DEFAULT_FUNCTIONAL="PBE"):
+            potcar = Potcar(["Fe", "P"])
+            assert potcar[0].functional_class == "GGA"
+            assert potcar[1].functional_class == "GGA"
+
+        with patch.dict(SETTINGS, PMG_DEFAULT_FUNCTIONAL="LDA"):
+            potcar = Potcar(["Fe", "P"])
+            assert potcar[0].functional_class == "LDA"
+            assert potcar[1].functional_class == "LDA"
 
     def test_pickle(self):
         pickle.dumps(self.potcar)
@@ -2008,6 +2029,42 @@ def test_potcar_summary_stats() -> None:
     for key, expected in n_potcars_per_functional.items():
         actual = len(potcar_summary_stats[key])
         assert actual == expected, f"{key=}, {expected=}, {actual=}"
+
+
+def test_compare_potcar_stats_relative_tolerance() -> None:
+    """compare_potcar_stats uses a magnitude-relative tolerance.
+
+    Summary-stat values (especially VAR) reach ~1e12 for heavy elements. A value
+    stored in potcar-summary-stats.json and re-parsed can differ from a freshly
+    computed one by 1-2 float64 ULPs -- far larger than the 1e-6 tolerance in
+    absolute terms, but not a real difference. Such pairs must still match, while
+    a genuinely different value must not.
+    """
+    reference = {
+        "keywords": {"header": ["titel", "zval"], "data": ["localpart"]},
+        "stats": {
+            "header": {"MEAN": 32.8, "ABSMEAN": 32.8, "VAR": 1.0e4, "MIN": 0.0, "MAX": 8.1e2},
+            "data": {
+                "MEAN": 172565.99127092774,
+                "ABSMEAN": 172585.5792270369,
+                "VAR": 2551106075405.738,  # ~2.55e12; 1 ULP ~5e-4 in absolute terms
+                "MIN": -239.142614172,
+                "MAX": 23770213.0296,
+            },
+        },
+    }
+
+    # A one-ULP perturbation of the large VAR (what JSON round-tripping introduces)
+    # must still be treated as a match.
+    one_ulp_off = copy.deepcopy(reference)
+    one_ulp_off["stats"]["data"]["VAR"] = np.nextafter(reference["stats"]["data"]["VAR"], np.inf)
+    assert np.nextafter(reference["stats"]["data"]["VAR"], np.inf) != reference["stats"]["data"]["VAR"]
+    assert PotcarSingle.compare_potcar_stats(reference, one_ulp_off)
+
+    # A genuinely different VAR (relative difference well above tolerance) must not.
+    genuinely_different = copy.deepcopy(reference)
+    genuinely_different["stats"]["data"]["VAR"] *= 1.001
+    assert not PotcarSingle.compare_potcar_stats(reference, genuinely_different)
 
 
 def test_gen_potcar_summary_stats() -> None:

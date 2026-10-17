@@ -1042,11 +1042,14 @@ class Incar(UserDict, MSONable):
                     return int(str_)
 
                 output = []
-                tokens = re.findall(r"(-?\d+\.?\d*|[\.A-Z]+)\*?(-?\d+\.?\d*|[\.A-Z]+)?\*?(-?\d+\.?\d*|[\.A-Z]+)?", val)
+                # a single token is a number (incl. scientific notation, e.g. 1e-3) or an uppercase/dot
+                # string (e.g. .TRUE.); up to 3 tokens may be joined by "*" multipliers (e.g. 9*0.6)
+                num_or_str = r"-?\d+\.?\d*(?:[eE][-+]?\d+)?|[\.A-Z]+"
+                tokens = re.findall(rf"({num_or_str})\*?({num_or_str})?\*?({num_or_str})?", val)
                 for tok in tokens:
-                    if tok[2] and "3" in tok[0]:
+                    if tok[2]:  # nested multiplier "count1*count2*value" (e.g. 3*3*-1)
                         output.extend([smart_int_or_float_bool(tok[2])] * int(tok[0]) * int(tok[1]))
-                    elif tok[1]:
+                    elif tok[1]:  # multiplier "count*value" (e.g. 9*0.6)
                         output.extend([smart_int_or_float_bool(tok[1])] * int(tok[0]))
                     else:
                         output.append(smart_int_or_float_bool(tok[0]))
@@ -2323,7 +2326,10 @@ class PotcarSingle:
                 return input_str
 
         psp_keys, psp_vals = [], []
-        potcar_body = self.data.split("END of PSCTR-controll parameters\n")[1]
+        # Tolerate CRLF line endings: a hardcoded "\n" delimiter raises IndexError
+        # for POTCAR text that still carries \r\n, e.g. when the file was read in
+        # binary mode or its bytes were otherwise passed through unchanged.
+        potcar_body = re.split(r"END of PSCTR-controll parameters\r?\n", self.data)[1]
         for row in re.split(r"\n+|;", potcar_body):  # FORTRAN allows ; to delimit multiple lines merged into 1 line
             tmp_str = ""
             for raw_val in row.split():
@@ -2513,10 +2519,23 @@ class PotcarSingle:
 
         data_match = False
         if key_match:
+            # Use a magnitude-relative tolerance. Summary-stat values (especially
+            # VAR) reach ~1e12 for heavy elements, where a value stored in
+            # potcar-summary-stats.json (round-tripped through JSON) differs from a
+            # freshly-parsed one by 1-2 float64 ULPs -- far larger than a fixed
+            # absolute tolerance, yet not a real difference. Scaling by
+            # max(|a|, |b|, 1) fixes those false mismatches while remaining
+            # effectively absolute (scale == 1) for small-magnitude quantities.
             data_diff = [
-                abs(potcar_stats_1["stats"].get(key, {}).get(stat) - potcar_stats_2["stats"].get(key, {}).get(stat))
+                abs(v1 - v2) / max(abs(v1), abs(v2), 1.0)
                 for stat in ("MEAN", "ABSMEAN", "VAR", "MIN", "MAX")
                 for key in check_potcar_fields
+                for v1, v2 in [
+                    (
+                        potcar_stats_1["stats"].get(key, {}).get(stat),
+                        potcar_stats_2["stats"].get(key, {}).get(stat),
+                    )
+                ]
             ]
             data_match = all(np.array(data_diff) < tolerance)
 

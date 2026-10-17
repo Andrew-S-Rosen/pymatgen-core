@@ -10,6 +10,7 @@ from pytest import approx
 from spglib import SpglibDataset
 
 from pymatgen.core import Lattice, Molecule, PeriodicSite, Site, Species, Structure
+from pymatgen.core.composition import Composition
 from pymatgen.io.vasp.outputs import Vasprun
 from pymatgen.symmetry.analyzer import (
     PointGroupAnalyzer,
@@ -89,6 +90,19 @@ class TestSpacegroupAnalyzer(MatSciTest):
     def test_get_pointgroup(self):
         assert self.sg.get_point_group_symbol() == "mmm"
         assert self.disordered_sg.get_point_group_symbol() == "4/mmm"
+
+    def test_get_pointgroup_unaligned_supercell(self):
+        # point group determination is basis-independent, consistent with the space group type, including
+        # for supercells whose basis vectors are not aligned with the conventional cell axes
+        # (where some point operations are not expressible as integer matrices in the cell basis) --
+        # previously a failure case, when point-group determination was based on spglib rotations dataset
+        diamond = Structure.from_spacegroup("Fd-3m", Lattice.cubic(3.5597), ["C"], [[0, 0, 0]])
+        for sc_matrix in (3, [[2, 2, -1], [-1, 2, 2], [2, -1, 2]]):  # aligned & rotated 3a0 cubes
+            struct = diamond.copy()
+            struct.make_supercell(sc_matrix)
+            sga = SpacegroupAnalyzer(struct, symprec=0.01)
+            assert sga.get_space_group_symbol() == "Fd-3m"
+            assert sga.get_point_group_symbol() == "m-3m"
 
     def test_get_pearson_symbol(self):
         assert self.sg.get_pearson_symbol() == "oP24"
@@ -463,6 +477,188 @@ class TestSpacegroupAnalyzer(MatSciTest):
         assert spg_analyzer.get_crystal_system() == "tetragonal"
         assert spg_analyzer.get_hall() == "-I 4 2"
 
+    def test_hexagonal_almost_rhombohedral(self):
+        """Test that #4679 is fixed (hexagonal lattice with a close to c is not rhombohedral)."""
+        species = [Composition({"Gd": 0.5}), Composition({"Se": 0.5}), Composition({"F": 0.5})]
+        structure = Structure(
+            lattice=[
+                [4.0570938, 0.0, 0.0],
+                [0.0, 4.0572993, 0.0],
+                [0.0, -2.02864965, 3.51372426],
+            ],
+            species=species,
+            coords=[
+                [0.67496701, 2.02864967, 1.17124141],
+                [2.70478423, -2.02864966e-8, 2.34248285],
+                [0.67734256, 0.0, 0.0],
+            ],
+            coords_are_cartesian=True,
+        )
+
+        sga = SpacegroupAnalyzer(structure, symprec=0.01)
+        primitive = sga.get_primitive_standard_structure()
+        # 3 atoms expected in primitive rhombohedral cell (not 9)
+        assert len(primitive) == 3
+
+        # Check that sites are still half-occupied
+        # (but do not force a specific site ordering)
+        assert primitive.sites[0].species in species
+
+        # Initialize a rhombohedral cell with a hexagonal lattice
+        spec = Composition({"H": 0.5})
+        hex_rhomb = Structure.from_spacegroup(166, Lattice.hexagonal(5, 7), [spec], coords=np.zeros((1, 3)))
+        assert len(hex_rhomb) == 3
+        # Primitive (rhombohedral) form should be 1/3, same spacegroup
+        primitive = SpacegroupAnalyzer(hex_rhomb).get_primitive_standard_structure()
+        assert len(primitive) == 1
+        prim_sga = SpacegroupAnalyzer(primitive)
+        # Symmetry unchanged
+        assert prim_sga.get_space_group_number() == 166
+        # Check that rhombohedral cells also use .species in primitivization
+        assert primitive.sites[0].species == spec
+        # Re-standardizaion leads back to 3 sites
+        re_standard = prim_sga.get_conventional_standard_structure()
+        assert len(re_standard) == 3
+
+    def test_primitivization_of_a_centered_cell(self):
+        """Test that an A-centered cell modifies gamma when primitivized."""
+        ortho_lattice = Lattice.orthorhombic(10, 11, 12)
+        species = ["Si", "Ge"]
+        # General sites
+        coords = [[0.137, 0.251, 0.389], [0.947, 0.370, 0.050]]
+        struct = Structure.from_spacegroup("Amm2", ortho_lattice, species, coords)
+        sga = SpacegroupAnalyzer(struct)
+
+        assert sga.get_space_group_number() == 38
+        # *gamma* is not 90° anymore
+        # (Note that this happens because the A-centering is changed to C-centering
+        # during standardization [without changing the saved space group!]. For normal
+        # A-centering it would be alpha != 90.)
+        lattice = sga.get_primitive_standard_structure().lattice
+        assert lattice.gamma != 90
+        # Due to the same standardization, the previous a parameter is unchanged in c
+        assert math.isclose(lattice.c, 10)
+        # and a/b are approximately equal
+        assert math.isclose(lattice.a, lattice.b)
+
+    def test_primitivization_matrices(self):
+        """Test that `get_conventional_to_primitive_transformation_matrix` returns expected matrices."""
+
+        # Tests all branches for the expected result
+        # Expected matrices have positive determinants and match transposed spglib
+        # (= Setyawan/Curtarolo for non-R)
+
+        cases = (
+            (
+                "P",
+                Structure.from_spacegroup(
+                    "P1",
+                    Lattice.from_parameters(2, 3, 5, 85, 95, 105),
+                    ["H", "He"],
+                    np.array([[0, 0, 0], [0.137, 0.251, 0.389]]),
+                ),
+                np.eye(3),
+            ),
+            (
+                "R",
+                Structure.from_spacegroup(
+                    "R-3c",
+                    Lattice.hexagonal(2, 3),
+                    ["H"],
+                    [[0, 0, 0]],
+                ),
+                np.array(
+                    [
+                        [2, 1, 1],
+                        [-1, 1, 1],
+                        [-1, -2, 1],
+                    ],
+                )
+                / 3,
+            ),
+            (
+                "I",
+                Structure.from_spacegroup(
+                    "Im-3m",
+                    Lattice.cubic(2),
+                    ["H"],
+                    [[0, 0, 0]],
+                ),
+                np.array(
+                    [
+                        [-1, 1, 1],
+                        [1, -1, 1],
+                        [1, 1, -1],
+                    ],
+                )
+                / 2,
+            ),
+            (
+                "F",
+                Structure.from_spacegroup(
+                    "Fm-3m",
+                    Lattice.cubic(3),
+                    ["H"],
+                    [[0, 0, 0]],
+                ),
+                np.array(
+                    [
+                        [0, 1, 1],
+                        [1, 0, 1],
+                        [1, 1, 0],
+                    ],
+                )
+                / 2,
+            ),
+            (
+                "C, monoclinic",
+                Structure.from_spacegroup(
+                    "C2/m",
+                    Lattice.monoclinic(2, 3, 5, 100),
+                    ["H"],
+                    [[0, 0, 0]],
+                ),
+                np.array(
+                    [
+                        [1, 1, 0],
+                        [-1, 1, 0],
+                        [0, 0, 2],
+                    ],
+                )
+                / 2,
+            ),
+            (
+                "C, non-monoclinic",
+                Structure.from_spacegroup(
+                    "Cmmm",
+                    Lattice.orthorhombic(2, 3, 5),
+                    ["H"],
+                    [[0, 0, 0]],
+                ),
+                np.array(
+                    [
+                        [1, -1, 0],
+                        [1, 1, 0],
+                        [0, 0, 2],
+                    ],
+                )
+                / 2,
+            ),
+        )
+
+        for case, structure, expected in cases:
+            sga = SpacegroupAnalyzer(structure)
+            # Check for accidental changes in centering
+            assert sga.get_space_group_symbol()[0] == case[0]
+
+            np.testing.assert_allclose(
+                expected,
+                sga.get_conventional_to_primitive_transformation_matrix(),
+                rtol=0,
+                atol=1e-14,
+                err_msg=f"Incorrect matrix for {case}.",
+            )
+
     def test_bad_structure(self):
         struct = Structure(Lattice.cubic(5), ["H", "H"], [[0.0, 0.0, 0.0], [0.001, 0.0, 0.0]])
 
@@ -667,6 +863,54 @@ class TestPointGroupAnalyzer(MatSciTest):
         mol = Molecule.from_file(f"{TEST_DIR}/b12h12.xyz")
         pg_analyzer = PointGroupAnalyzer(mol)
         assert pg_analyzer.sch_symbol == "Ih"
+
+    def test_symmetric_top_without_rotation_about_the_unique_axis(self):
+        """A single C2 perpendicular to the unique axis is C2, not D2."""
+        mol = Molecule(
+            ["N", "C", "C", "N", "C", "C"] + ["H"] * 12,
+            [
+                [0.659378, 0.426967, 0.335225],
+                [1.239101, -0.891619, 0.590775],
+                [1.460417, 1.194080, -0.618856],
+                [-0.737346, 0.421402, -0.090549],
+                [-1.098486, -0.638411, -1.032051],
+                [-1.608821, 0.420712, 1.084581],
+                [0.637371, -1.460287, 1.307856],
+                [2.231617, -0.780150, 1.042295],
+                [1.355172, -1.489249, -0.320334],
+                [1.513941, 0.714989, -1.602943],
+                [1.049973, 2.202327, -0.748199],
+                [2.482813, 1.318290, -0.244521],
+                [-2.116346, -0.474199, -1.404049],
+                [-1.067877, -1.636694, -0.581223],
+                [-0.445143, -0.631385, -1.911122],
+                [-1.533093, -0.506981, 1.662903],
+                [-1.368190, 1.260437, 1.746930],
+                [-2.654480, 0.549769, 0.783280],
+            ],
+        )
+        pg_analyzer = PointGroupAnalyzer(mol, tolerance=0.1)
+        assert pg_analyzer.sch_symbol == "C2"
+        assert len(pg_analyzer.get_symmetry_operations()) == 2
+        assert len(pg_analyzer.get_pointgroup()) == 2
+        assert all(order > 1 for _axis, order in pg_analyzer.rot_sym)
+
+    def test_accidental_spherical_top_without_rotation_symmetry(self):
+        """An isotropic inertia tensor with no rotational symmetry is C1, not an error."""
+        mol = Molecule(
+            ["H", "C", "N", "O", "F"],
+            [
+                [0.421312, -4.714984, 0.857910],
+                [-0.791788, -0.926881, -0.452260],
+                [-2.060115, -0.316787, -1.286876],
+                [-0.024651, 0.414342, -0.853569],
+                [-0.386488, -0.858129, -2.322082],
+            ],
+        )
+        pg_analyzer = PointGroupAnalyzer(mol)
+        assert pg_analyzer.eigvals.max() - pg_analyzer.eigvals.min() < 0.01
+        assert pg_analyzer.sch_symbol == "C1"
+        assert pg_analyzer.rot_sym == []
 
     def test_symmetrize_molecule1(self):
         distortion = np.random.default_rng(0).standard_normal((len(C2H4), 3)) / 10

@@ -175,7 +175,7 @@ class Lattice(MSONable):
             jj = (dim + 1) % 3
             kk = (dim + 2) % 3
             angles[dim] = np.clip(np.dot(matrix[jj], matrix[kk]) / (lengths[jj] * lengths[kk]), -1, 1)
-        angles = np.arccos(angles) * 180.0 / np.pi  # type: ignore[assignment]
+        angles = np.rad2deg(np.arccos(angles))  # type: ignore[assignment]
         return tuple(angles.tolist())  # type: ignore[return-value]
 
     @cached_property
@@ -215,7 +215,7 @@ class Lattice(MSONable):
         """Get the Cartesian coordinates given fractional coordinates.
 
         Args:
-            fractional_coords (3x1 array): Fractional coords.
+            fractional_coords (3x1 or Nx3 array): Fractional coords.
 
         Returns:
             Cartesian coordinates
@@ -226,7 +226,7 @@ class Lattice(MSONable):
         """Get the fractional coordinates given Cartesian coordinates.
 
         Args:
-            cart_coords (3x1 array): Cartesian coords.
+            cart_coords (3x1 or Nx3 array): Cartesian coords.
 
         Returns:
             Fractional coordinates.
@@ -248,18 +248,18 @@ class Lattice(MSONable):
         class in `pymatgen.analysis.ferroelectricity.polarization`.
 
         Args:
-            cart_coords (3x1 array): Cartesian coords.
+            cart_coords (3x1 or Nx3 array): Cartesian coords.
 
         Returns:
             Lattice coordinates.
         """
         return self.get_fractional_coords(cart_coords) * self.lengths
 
-    def d_hkl(self, miller_index: tuple[int, ...]) -> float:
+    def d_hkl(self, miller_index: ArrayLike) -> float:
         """Get the distance between the hkl plane and the origin.
 
         Args:
-            miller_index (tuple[int, ...]): Miller index of plane
+            miller_index (ArrayLike): Miller index of plane
 
         Returns:
             float: distance between hkl plane and origin
@@ -957,7 +957,7 @@ class Lattice(MSONable):
             x = np.inner(v1, v2) / l1[:, None] / l2
             x[x > 1] = 1
             x[x < -1] = -1
-            return np.arccos(x) * 180.0 / np.pi
+            return np.rad2deg(np.arccos(x))
 
         lengths = other_lattice.lengths
         alpha, beta, gamma = other_lattice.angles
@@ -1011,24 +1011,36 @@ class Lattice(MSONable):
 
         Returns:
             tuple[Lattice, NDArray[np.float_], NDArray[np.float_]]: (aligned_lattice, rotation_matrix, scale_matrix)
-            if a mapping is found. aligned_lattice is a rotated version of other_lattice that
-            has the same lattice parameters, but which is aligned in the
-            coordinate system of this lattice so that translational points
-            match up in 3D. rotation_matrix is the rotation that has to be
-            applied to other_lattice to obtain aligned_lattice, i.e.,
-            aligned_matrix = np.inner(other_lattice, rotation_matrix) and
-            op = SymmOp.from_rotation_and_translation(rotation_matrix)
-            aligned_matrix = op.operate_multi(latt.matrix)
-            Finally, scale_matrix is the integer matrix that expresses
-            aligned_matrix as a linear combination of this
-            lattice, i.e., aligned_matrix = np.dot(scale_matrix, self.matrix)
+                if a mapping is found. aligned_lattice is a rotated version of other_lattice that
+                has the same lattice parameters, but which is aligned in the
+                coordinate system of this lattice so that translational points
+                match up in 3D. rotation_matrix is the rotation that has to be
+                applied to other_lattice to obtain aligned_lattice, i.e.,
+                aligned_matrix = np.inner(other_lattice, rotation_matrix) and
+                op = SymmOp.from_rotation_and_translation(rotation_matrix)
+                aligned_matrix = op.operate_multi(latt.matrix)
+                Finally, scale_matrix is the integer matrix that expresses
+                aligned_matrix as a linear combination of this
+                lattice, i.e., aligned_matrix = np.dot(scale_matrix, self.matrix)
 
-            None is returned if no matches are found.
+                None is returned if no matches are found.
+
+            When several maps exist, a proper rotation (``det R > 0``, or
+            ``det(scale) > 0`` if the rotation is skipped) is preferred over
+            a reflection. An improper map is returned only when no proper map
+            exists. See materialsproject/pymatgen#4457.
         """
-        return next(
-            self.find_all_mappings(other_lattice, ltol, atol, skip_rotation_matrix),
-            None,
-        )
+        first = None
+        for mapped in self.find_all_mappings(other_lattice, ltol, atol, skip_rotation_matrix):
+            if first is None:
+                first = mapped
+            _aligned, rotation_m, scale_m = mapped
+            if skip_rotation_matrix:
+                if np.linalg.det(scale_m) > 0:
+                    return mapped
+            elif rotation_m is not None and np.linalg.det(rotation_m) > 0:
+                return mapped
+        return first
 
     def get_lll_reduced_lattice(self, delta: float = 0.75) -> Self:
         """Lenstra-Lenstra-Lovasz lattice basis reduction.
@@ -1155,8 +1167,9 @@ class Lattice(MSONable):
         matrix = self.lll_matrix
         e = tol * self.volume ** (1 / 3)
 
-        # Define metric tensor
-        G = np.dot(matrix, matrix.T)
+        # Define metric tensor. The explicit annotation stops pyright from hanging
+        # on loop type inference against numpy>=2.5 stubs.
+        G: np.ndarray = np.dot(matrix, matrix.T)
 
         # This sets an upper limit on the number of iterations.
         for _ in range(100):
@@ -1261,9 +1274,9 @@ class Lattice(MSONable):
         a = math.sqrt(A)
         b = math.sqrt(B)
         c = math.sqrt(C)
-        alpha = math.acos(E / 2 / b / c) / math.pi * 180
-        beta = math.acos(N / 2 / a / c) / math.pi * 180
-        gamma = math.acos(Y / 2 / a / b) / math.pi * 180
+        alpha = math.degrees(math.acos(E / 2 / b / c))
+        beta = math.degrees(math.acos(N / 2 / a / c))
+        gamma = math.degrees(math.acos(Y / 2 / a / b))
         lattice = type(self).from_parameters(a, b, c, alpha, beta, gamma)
 
         mapped = self.find_mapping(lattice, e, skip_rotation_matrix=True)
@@ -1619,8 +1632,12 @@ class Lattice(MSONable):
             2d array of Cartesian distances. E.g the distance between
             frac_coords1[i] and frac_coords2[j] is distances[i,j]
         """
-        _v, d2 = pbc_shortest_vectors(self, frac_coords1, frac_coords2, return_d2=True)
-        return np.sqrt(d2)
+        frac_coords1 = np.asarray(frac_coords1)
+        frac_coords2 = np.asarray(frac_coords2)
+        if len(frac_coords1) and len(frac_coords2):
+            _v, d2 = pbc_shortest_vectors(self, frac_coords1, frac_coords2, return_d2=True)
+            return np.sqrt(d2)
+        return np.empty((len(frac_coords1), len(frac_coords2)), dtype=np.float64)
 
     def is_hexagonal(
         self,
@@ -1736,7 +1753,7 @@ class Lattice(MSONable):
         to be used for hkl transformations.
 
         Args:
-            symprec: default is 0.001.
+            symprec: default is 0.01.
         """
         recp_lattice = self.reciprocal_lattice_crystallographic
         # Get symmetry operations from input conventional unit cell
@@ -1757,7 +1774,7 @@ class Lattice(MSONable):
 
 
 def get_integer_index(
-    miller_index: tuple[int, ...],
+    miller_index: ArrayLike,
     round_dp: int = 4,
     verbose: bool = True,
 ) -> tuple[int, ...]:
@@ -1863,15 +1880,15 @@ def get_points_in_spheres(
 
         # Temporarily hold the fractional coordinates
         image_offsets = lattice.get_fractional_coords(all_coords)
-        all_frac_coords = []
+        frac_coords_list = []
 
         # Only wrap periodic boundary
         for kk in range(3):
             if _pbc[kk]:
-                all_frac_coords.append(np.mod(image_offsets[:, kk : kk + 1], 1))
+                frac_coords_list.append(np.mod(image_offsets[:, kk : kk + 1], 1))
             else:
-                all_frac_coords.append(image_offsets[:, kk : kk + 1])
-        all_frac_coords = np.concatenate(all_frac_coords, axis=1)
+                frac_coords_list.append(image_offsets[:, kk : kk + 1])
+        all_frac_coords = np.concatenate(frac_coords_list, axis=1)
         image_offsets -= all_frac_coords
         coords_in_cell = np.dot(all_frac_coords, matrix)
 
@@ -1892,7 +1909,7 @@ def get_points_in_spheres(
                 valid_indices.extend([k for k in ind if valid_index_bool[k]])
         if not valid_coords:
             return [[]] * len(center_coords)
-        valid_coords = np.concatenate(valid_coords, axis=0)
+        valid_coords = np.concatenate(valid_coords, axis=0)  # type: ignore[assignment]
         valid_images = np.concatenate(valid_images, axis=0)  # type:ignore[assignment]
 
     else:

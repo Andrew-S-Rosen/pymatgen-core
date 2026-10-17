@@ -73,7 +73,8 @@ class EwaldSummation(MSONable):
         Args:
             structure (Structure): Input structure that must have proper
                 Species on all sites, i.e. Element with oxidation state. Use
-                Structure.add_oxidation_state... for example.
+                Structure.add_oxidation_state... for example. The lattice
+                must be periodic in all three directions.
             real_space_cut (float): Real space cutoff radius dictating how
                 many terms are used in the real space sum. Defaults to None,
                 which means determine automatically using the formula given
@@ -94,9 +95,13 @@ class EwaldSummation(MSONable):
                 cutoffs are set to None.
             compute_forces (bool): Whether to compute forces. False by
                 default since it is usually not needed.
+
+        Raises:
+            ValueError: If the lattice is not periodic in all three directions.
         """
+        if not structure.lattice.is_3d_periodic:
+            raise ValueError(f"EwaldSummation requires a 3D periodic lattice, got pbc={structure.lattice.pbc}.")
         self._struct = structure
-        self._charged = abs(structure.charge) > 1e-8
         self._vol = structure.volume
         self._compute_forces = compute_forces
 
@@ -116,6 +121,23 @@ class EwaldSummation(MSONable):
         # Ewald summation is rather expensive, and these shortcuts are
         # necessary to obtain several factors of improvement in speedup.
         self._oxi_states = [compute_average_oxidation_state(site) for site in structure]
+        # Net cell charge from the same per-site charges used in the sums. The neutralizing background
+        # must cancel these, so they take precedence over Structure.charge, which only counts oxidation
+        # states (or an explicitly set charge) and misses charges supplied via the "charge" site property.
+        self._total_charge = float(sum(self._oxi_states))
+        self._charged = abs(self._total_charge) > 1e-8
+        # Only check consistency when the structure itself defines a charge, i.e. an explicitly set
+        # charge or oxidation states. Charges supplied purely via the "charge" site property are not
+        # counted by Structure.charge, so a mismatch there is expected and not worth a warning.
+        has_explicit_charge = getattr(structure, "_charge", None) is not None
+        has_oxi_states = any(getattr(sp, "oxi_state", None) is not None for sp in structure.types_of_species)
+        struct_charge = structure.charge if has_explicit_charge or has_oxi_states else self._total_charge
+        if abs(self._total_charge - struct_charge) > 1e-8:
+            warnings.warn(
+                f"Sum of site charges ({self._total_charge}) is inconsistent with structure.charge "
+                f"({struct_charge}). The charged-cell correction uses the sum of site charges.",
+                stacklevel=2,
+            )
 
         self._coords = np.array(self._struct.cart_coords)
 
@@ -126,7 +148,7 @@ class EwaldSummation(MSONable):
 
         # Compute the correction for a charged cell
         self._charged_cell_energy = (
-            -EwaldSummation.CONV_FACT / 2 * np.pi / structure.volume / self._eta * structure.charge**2
+            -EwaldSummation.CONV_FACT / 2 * np.pi / structure.volume / self._eta * self._total_charge**2
         )
 
     def compute_partial_energy(self, removed_indices):
@@ -135,7 +157,7 @@ class EwaldSummation(MSONable):
         for idx in removed_indices:
             total_energy_matrix[idx, :] = 0
             total_energy_matrix[:, idx] = 0
-        return sum(sum(total_energy_matrix))
+        return total_energy_matrix.sum()
 
     def compute_sub_structure(self, sub_structure, tol: float = 1e-3):
         """Get total Ewald energy for an sub structure in the same
@@ -177,7 +199,7 @@ class EwaldSummation(MSONable):
             output.extend(f"unmatched = {site}" for site in sub_structure if site not in matches)
             raise ValueError("\n".join(output))
 
-        return sum(sum(total_energy_matrix))
+        return total_energy_matrix.sum()
 
     @property
     def reciprocal_space_energy(self):
@@ -185,7 +207,7 @@ class EwaldSummation(MSONable):
         if not self._initialized:
             self._calc_ewald_terms()
             self._initialized = True
-        return sum(sum(self._recip))
+        return self._recip.sum()
 
     @property
     def reciprocal_space_energy_matrix(self):
@@ -204,7 +226,7 @@ class EwaldSummation(MSONable):
         if not self._initialized:
             self._calc_ewald_terms()
             self._initialized = True
-        return sum(sum(self._real))
+        return self._real.sum()
 
     @property
     def real_space_energy_matrix(self):
@@ -240,7 +262,7 @@ class EwaldSummation(MSONable):
         if not self._initialized:
             self._calc_ewald_terms()
             self._initialized = True
-        return sum(sum(self._recip)) + sum(sum(self._real)) + sum(self._point) + self._charged_cell_energy
+        return self._recip.sum() + self._real.sum() + self._point.sum() + self._charged_cell_energy
 
     @property
     def total_energy_matrix(self):
@@ -255,8 +277,8 @@ class EwaldSummation(MSONable):
             self._initialized = True
 
         total_energy = self._recip + self._real
-        for idx, energy in enumerate(self._point):
-            total_energy[idx, idx] += energy
+        np.fill_diagonal(total_energy, total_energy.diagonal() + self._point)
+
         return total_energy
 
     @property
@@ -302,92 +324,105 @@ class EwaldSummation(MSONable):
         S(G) = sum_{k=1,N} q_k exp(-i G.r_k)
         S(G)S(-G) = |S(G)|**2.
 
-        This method is heavily vectorized to utilize numpy's C backend for speed.
+        Fully vectorized over G-vectors via matrix multiplication (no Python
+        loop over reciprocal lattice points), using the identity
+        sin(A - B + pi/4) = [cos(A-B) + sin(A-B)] / sqrt(2)
+                        = [cos(A)cos(B) + sin(A)sin(B) + cos(A)sin(B) - sin(A)cos(B)] / sqrt(2)
+        which separates by site index and lets the G-sum become a matmul.
         """
         n_sites = len(self._struct)
         prefactor = 2 * math.pi / self._vol
-        e_recip = np.zeros((n_sites, n_sites), dtype=np.float64)
-        forces = np.zeros((n_sites, 3), dtype=np.float64)
         coords = self._coords
         rcp_latt = self._struct.lattice.reciprocal_lattice
         recip_nn = rcp_latt.get_points_in_sphere([[0, 0, 0]], [0, 0, 0], self._gmax)
 
         frac_coords = [frac_coords for (frac_coords, dist, _idx, _img) in recip_nn if dist != 0]
 
-        gs = rcp_latt.get_cartesian_coords(frac_coords)
-        g2s = np.sum(gs**2, 1)
-        exp_vals = np.exp(-g2s / (4 * self._eta))
-        grs = np.sum(gs[:, None] * coords[None, :], 2)
+        gs = rcp_latt.get_cartesian_coords(frac_coords)  # (n_g, 3)
+        g2s = np.sum(gs**2, 1)  # (n_g,)
+        exp_vals = np.exp(-g2s / (4 * self._eta))  # (n_g,)
+        grs = np.sum(gs[:, None] * coords[None, :], 2)  # (n_g, n_sites)
 
         oxi_states = np.array(self._oxi_states)
-
-        # create array where q_2[i,j] is qi * qj
         qi_qj = oxi_states[None, :] * oxi_states[:, None]
 
-        # calculate the structure factor
-        s_reals = np.sum(oxi_states[None, :] * np.cos(grs), 1)
-        s_imags = np.sum(oxi_states[None, :] * np.sin(grs), 1)
+        cos_vals = np.cos(grs)  # (n_g, n_sites)
+        sin_vals = np.sin(grs)
 
-        for g, g2, gr, exp_val, s_real, s_imag in zip(gs, g2s, grs, exp_vals, s_reals, s_imags, strict=True):
-            # Uses the identity sin(x)+cos(x) = 2**0.5 sin(x + pi/4)
-            m = np.sin((gr[None, :] + math.pi / 4) - gr[:, None])
-            m *= exp_val / g2
+        s_reals = np.sum(oxi_states[None, :] * cos_vals, 1)  # (n_g,)
+        s_imags = np.sum(oxi_states[None, :] * sin_vals, 1)
 
-            e_recip += m
+        w = exp_vals / g2s  # (n_g,)
 
-            if self._compute_forces:
-                pref = 2 * exp_val / g2 * oxi_states
-                factor = prefactor * pref * (s_real * np.sin(gr) - s_imag * np.cos(gr))
-
-                forces += factor[:, None] * g[None, :]
-
-        forces *= EwaldSummation.CONV_FACT
+        # sin(G·r_j + pi/4 - G·r_i) splits, via angle-addition, into (cos_i+sin_i)*sin_j
+        # and (cos_i-sin_i)*cos_j terms, so summing over G becomes two matmuls instead of a loop.
+        U = (cos_vals + sin_vals) * w[:, None]
+        V = (cos_vals - sin_vals) * w[:, None]
+        e_recip = (U.T @ sin_vals + V.T @ cos_vals) / 2**0.5  # (n_sites, n_sites)
         e_recip *= prefactor * EwaldSummation.CONV_FACT * qi_qj * 2**0.5
+
+        forces = np.zeros((n_sites, 3), dtype=np.float64)
+        if self._compute_forces:
+            A = (2 * w)[:, None] * (s_reals[:, None] * sin_vals - s_imags[:, None] * cos_vals)
+            forces = prefactor * oxi_states[:, None] * (A.T @ gs)  # (n_sites, 3)
+            forces *= EwaldSummation.CONV_FACT
+
         return e_recip, forces
 
     def _calc_real_and_point(self):
-        """Determine the self energy -(eta/pi)**(1/2) * sum_{i=1}^{N} q_i**2."""
+        """
+        Determine the self energy -(eta/pi)**(1/2) * sum_{i=1}^{N} q_i**2.
+        Vectorized real + point space computation.
+        """
+        lat = self._struct.lattice
         frac_coords = self._struct.frac_coords
-        force_pf = 2 * self._sqrt_eta / math.sqrt(math.pi)
         coords = self._coords
-        n_sites = len(self._struct)
-        e_real = np.empty((n_sites, n_sites), dtype=np.float64)
 
+        n_sites = len(self._struct)
+        e_real = np.zeros((n_sites, n_sites), dtype=np.float64)
         forces = np.zeros((n_sites, 3), dtype=np.float64)
+        force_pf = 2 * self._sqrt_eta / math.sqrt(math.pi)
 
         qs = np.array(self._oxi_states)
 
+        # point term (already vectorized)
         e_point = -(qs**2) * math.sqrt(self._eta / math.pi)
 
         for idx in range(n_sites):
-            nf_coords, rij, js, _ = self._struct.lattice.get_points_in_sphere(
-                frac_coords, coords[idx], self._rmax, zip_results=False
-            )
+            nf_coords, rij, js, _ = lat.get_points_in_sphere(frac_coords, coords[idx], self._rmax, zip_results=False)
 
-            # remove the rii term
-            inds = rij > 1e-8
-            js = js[inds]
-            rij = rij[inds]
-            nf_coords = nf_coords[inds]
+            rij = np.asarray(rij)
+            js = np.asarray(js)
+
+            # remove self-interaction
+            mask = rij > 1e-8
+            rij = rij[mask]
+            js = js[mask]
+            nf_coords = nf_coords[mask]
+
+            if len(rij) == 0:
+                continue
 
             qi = qs[idx]
             qj = qs[js]
 
             erfc_val = erfc(self._sqrt_eta * rij)
-            new_ereals = erfc_val * qi * qj / rij
 
-            # insert new_ereals
-            for key in range(n_sites):
-                e_real[key, idx] = np.sum(new_ereals[js == key])
+            # pair contributions (vectorized)
+            contrib = erfc_val * qi * qj / rij
 
+            # ENERGY ACCUMULATION
+            np.add.at(e_real[:, idx], js, contrib)
+
+            # FORCE ACCUMULATION
             if self._compute_forces:
-                nc_coords = self._struct.lattice.get_cartesian_coords(nf_coords)
+                nc_coords = lat.get_cartesian_coords(nf_coords)
 
-                fijpf = qj / rij**3 * (erfc_val + force_pf * rij * np.exp(-self._eta * rij**2))
-                forces[idx] += np.sum(
-                    np.expand_dims(fijpf, 1) * (np.array([coords[idx]]) - nc_coords) * qi * EwaldSummation.CONV_FACT,
-                    axis=0,
-                )
+                diff = coords[idx] - nc_coords  # (M, 3)
+
+                fijpf = qj / (rij**3) * (erfc_val + force_pf * rij * np.exp(-self._eta * rij**2))
+
+                forces[idx] += np.sum(fijpf[:, None] * diff * qi * EwaldSummation.CONV_FACT, axis=0)
 
         e_real *= 0.5 * EwaldSummation.CONV_FACT
         e_point *= EwaldSummation.CONV_FACT

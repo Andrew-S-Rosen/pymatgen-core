@@ -4,6 +4,7 @@ Pyinvoke tasks.py file for automating releases and admin stuff.
 To cut a new pymatgen release:
 
     invoke update-changelog
+    git commit -am "Update changelog"
     invoke release
 """
 
@@ -19,48 +20,64 @@ from typing import TYPE_CHECKING
 import requests
 from invoke import task
 
-from pymatgen.core import __version__
-
 if TYPE_CHECKING:
     from invoke import Context
+
+
+def _is_breaking_pr(pr: dict) -> bool:
+    """A PR is breaking if its title starts with the ``[breaking]`` prefix."""
+    return bool(re.match(r"^\[breaking\]\s*", pr.get("title", "").strip(), flags=re.IGNORECASE))
+
+
+def _extract_breaking_notes(pr: dict) -> str:
+    """Extract the ``## Breaking Changes`` section of a PR body, if present.
+
+    The section runs until the next heading at or above its own level, so
+    ``###`` subsections (e.g. ``### Migration``) are kept; leftover HTML
+    comments (e.g. unfilled template placeholders) are stripped.
+    """
+    lines = (pr.get("body") or "").split("\n")
+    start = None
+    level = 2
+    for idx, line in enumerate(lines):
+        if m := re.match(r"^(#{2,4})\s+breaking changes\s*$", line, flags=re.IGNORECASE):
+            start = idx
+            level = len(m.group(1))
+            break
+    if start is None:
+        return ""
+    notes = []
+    for line in lines[start + 1 :]:
+        if re.match(rf"^#{{1,{level}}}\s", line):  # heading at/above the section level ends it
+            break
+        notes.append(line)
+    notes = re.sub(r"<!--.*?-->", "", "\n".join(notes), flags=re.DOTALL)
+    return notes.strip()
+
+
+def _compatibility_section(version: str, breaking_prs: list[dict]) -> str:
+    """Format the ``### v<version>`` section of COMPATIBILITY.md for ``[breaking]``-titled PRs."""
+    if not version:
+        raise ValueError("version must be provided")
+    lines = [f"### v{version}", ""]
+    for pr in breaking_prs:
+        num = pr["number"]
+        title = pr["title"].strip()
+        author = pr["user"]["login"]
+        url = f"https://github.com/materialsproject/pymatgen-core/pull/{num}"
+        lines.append(f"* {title} by @{author} in [#{num}]({url})")
+        if notes := _extract_breaking_notes(pr):
+            lines.append("")
+            lines.extend(f"  {line}" for line in notes.split("\n"))
+        lines.append("")
+    return "\n".join(lines)
+
 
 CHANGELOG_PROMPT = """
 Provide a concise summary of the following pull requests as a change log for the pymatgen package. Format the summary
 as a markdown bulleted list. Make sure to include the GitHub ids of all the authors. Do not include any code
 blocks and timing outputs. Do not include any dependabot and pre-commit PRs.
 """
-
-
-@task
-def publish(ctx: Context) -> None:
-    """
-    Upload release to Pypi using twine.
-
-    Args:
-        ctx (Context): The context.
-    """
-    ctx.run("rm dist/*.*", warn=True)
-    ctx.run("python setup.py sdist bdist_wheel")
-    ctx.run("twine upload dist/*")
-
-
-@task
-def set_ver(ctx: Context, version: str):
-    """
-    Set version in pyproject.toml file.
-
-    Args:
-        ctx (Context): The context.
-        version (str): An input version.
-    """
-    with open("pyproject.toml", encoding="utf-8") as file:
-        lines = [re.sub(r"^version = \"([^,]+)\"", f'version = "{version}"', line.rstrip()) for line in file]
-
-    with open("pyproject.toml", "w", encoding="utf-8") as file:
-        file.write("\n".join(lines) + "\n")
-
-    ctx.run("ruff check --fix src")
-    ctx.run("ruff format pyproject.toml")
 
 
 @task
@@ -80,7 +97,6 @@ def release_github(ctx: Context, version: str) -> None:
     desc = "\n".join(tokens[1:]).strip()
     payload = {
         "tag_name": f"v{version}",
-        "target_commitish": "main",
         "name": f"v{version}",
         "body": desc,
         "draft": False,
@@ -92,6 +108,7 @@ def release_github(ctx: Context, version: str) -> None:
         headers={"Authorization": f"token {os.environ['GITHUB_RELEASES_TOKEN']}"},
         timeout=60,
     )
+    response.raise_for_status()
     print(response.text)
 
 
@@ -107,9 +124,11 @@ def update_changelog(ctx: Context, version: str | None = None, dry_run: bool = F
             updating the actual change log file. Defaults to False.
     """
     version = version or f"{datetime.now(tz=UTC):%Y.%-m.%-d}"
-    print(f"Getting all commits since {__version__}")
-    output = subprocess.check_output(["git", "log", "--pretty=format:%s", f"v{__version__}..HEAD"])
+    last_tag = subprocess.check_output(["git", "describe", "--tags", "--abbrev=0"], text=True).strip()
+    print(f"Getting all commits since {last_tag}")
+    output = subprocess.check_output(["git", "log", "--pretty=format:%s", f"{last_tag}..HEAD"])
     lines = []
+    breaking_prs = []
     ignored_commits = []
     for line in output.decode("utf-8").strip().split("\n"):
         re_match = re.match(r".*\(\#(\d+)\)", line)
@@ -129,6 +148,8 @@ def update_changelog(ctx: Context, version: str | None = None, dry_run: bool = F
             )
             resp = response.json()
             lines += [f"- PR #{pr_number} {resp['title'].strip()} by @{resp['user']['login']}"]
+            if _is_breaking_pr(resp):
+                breaking_prs.append(resp)
             if body := resp["body"]:
                 for ll in map(str.strip, body.split("\n")):
                     if ll in ("", "## Summary"):
@@ -166,7 +187,26 @@ def update_changelog(ctx: Context, version: str | None = None, dry_run: bool = F
     else:
         with open("CHANGES.md", mode="w", encoding="utf-8") as file:
             file.write(tokens[0] + "##".join(tokens[1:]))
-        ctx.run("open docs/CHANGES.md")
+        ctx.run("open CHANGES.md")
+
+    if breaking_prs:
+        compat = _compatibility_section(version, breaking_prs)
+        with open("COMPATIBILITY.md", encoding="utf-8") as file:
+            contents = file.read()
+        marker = "## Recent Breaking Changes"
+        if marker not in contents:
+            raise RuntimeError(f"{marker!r} section not found in COMPATIBILITY.md")
+        idx = contents.index(marker) + len(marker)
+        new_contents = contents[:idx] + "\n\n" + compat + contents[idx:]
+        if dry_run:
+            print(new_contents)
+        else:
+            with open("COMPATIBILITY.md", mode="w", encoding="utf-8") as file:
+                file.write(new_contents)
+        print(f"Logged {len(breaking_prs)} breaking change(s) in COMPATIBILITY.md for v{version}.")
+    else:
+        print("No `[breaking]`-titled PRs since last tag; COMPATIBILITY.md not updated.")
+
     print("The following commit messages were not included...")
     print("\n".join(ignored_commits))
 
@@ -184,14 +224,23 @@ def release(ctx: Context, version: str | None = None) -> None:
         version (str, optional): The version to release.
     """
     version = version or f"{datetime.now(tz=UTC):%Y.%-m.%-d}"
-    ctx.run("rm -r dist build pymatgen.egg-info", warn=True)
-    set_ver(ctx, version)
-    release_github(ctx, version)
+    if not re.fullmatch(r"\d{4}\.\d{1,2}\.\d{1,2}", version):
+        raise ValueError("Version must use the YYYY.M.D calendar format")
 
-    ctx.run("rm -f dist/*.*", warn=True)
-    ctx.run("uv pip install -e .", warn=True)
-    ctx.run("uv build", warn=True)
-    ctx.run("uv publish", warn=True)
+    tag = f"v{version}"
+    if subprocess.run(["git", "status", "--porcelain"], check=True, capture_output=True, text=True).stdout:
+        raise RuntimeError("Commit or stash all changes before creating a release tag")
+    if (
+        subprocess.run(
+            ["git", "rev-parse", "-q", "--verify", f"refs/tags/{tag}"], check=False, capture_output=True
+        ).returncode
+        == 0
+    ):
+        raise RuntimeError(f"Tag {tag} already exists")
+
+    ctx.run(f"git tag {tag}")
+    ctx.run(f"git push origin {tag}")
+    release_github(ctx, version)
 
 
 @task
