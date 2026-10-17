@@ -367,7 +367,7 @@ class TestAbinitTimerMethods:
         assert timer.ncpus == 2
         assert timer.fname == abiref_file("mgb2_scf.abo")
         assert timer.info["mpi_rank"] == "0"
-        assert repr(timer) == f"AbinitTimer(file='{timer.fname}', wall_time=5.2, mpi_nprocs=2, omp_nthreads=1)"
+        assert repr(timer) == f"AbinitTimer(file={timer.fname!r}, wall_time=5.2, mpi_nprocs=2, omp_nthreads=1)"
         assert len(timer.section_names) == 30
         assert timer.get_section("pspini").ncalls == 1
         with pytest.raises(ValueError, match="not in tuple"):
