@@ -17,7 +17,7 @@ from pymatgen.phonon.thermal_displacements import ThermalDisplacementMatrices
 from pymatgen.symmetry.bandstructure import HighSymmKpath
 
 if TYPE_CHECKING:
-    from phonopy.phonon.mesh import MeshDict
+    from phonopy.phonon.mesh import Mesh
 
     from pymatgen.core.structure import IStructure
 
@@ -330,8 +330,8 @@ def get_phonon_dos_from_fc(
     )
 
     # get min, max, step frequency
-    # run_mesh without use_iter_mesh builds a Mesh, so get_mesh_dict returns a MeshDict
-    frequencies = cast("MeshDict", phonon.get_mesh_dict())["frequencies"]
+    # run_mesh without use_iter_mesh builds a Mesh (not an IterMesh)
+    frequencies = cast("Mesh", phonon.mesh).frequencies
     freq_min = frequencies.min()
     freq_max = frequencies.max()
     freq_pitch = (freq_max - freq_min) / num_dos_steps
@@ -375,9 +375,9 @@ def get_phonon_band_structure_from_fc(
     phonon = Phonopy(structure_phonopy, supercell_matrix=supercell_matrix, **kwargs)
     phonon.force_constants = force_constants
     phonon.run_mesh(mesh_density, is_mesh_symmetry=False, is_gamma_center=True)
-    mesh = cast("MeshDict", phonon.get_mesh_dict())
+    mesh = cast("Mesh", phonon.mesh)
 
-    return PhononBandStructure(mesh["qpoints"], mesh["frequencies"], structure.lattice)
+    return PhononBandStructure(mesh.qpoints, mesh.frequencies, structure.lattice)
 
 
 @requires(Phonopy is not None, "phonopy is required to calculate phonon band structures")

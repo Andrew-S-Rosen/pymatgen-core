@@ -475,7 +475,7 @@ def _write_cube(path: Path, values_per_line: int) -> np.ndarray:
     values = np.linspace(-0.4, 0.3, 8)
     rows = [values[i : i + values_per_line] for i in range(0, 8, values_per_line)]
     body = "".join(" ".join(f"{v:.6E}" for v in row) + "\n" for row in rows)
-    path.write_text(_CUBE_HEADER + body)
+    path.write_text(_CUBE_HEADER + body, encoding="utf-8")
     return values.reshape(2, 2, 2) / _to_ry(1)
 
 
@@ -496,7 +496,7 @@ class TestReadCubeFile:
 
     def test_invalid_header(self, tmp_path):
         path = tmp_path / "boltztrap_BZ.cube"
-        path.write_text("not a cube\n")
+        path.write_text("not a cube\n", encoding="utf-8")
         with pytest.raises(ValueError, match="CUBE file format not recognized"):
             read_cube_file(str(path))
 
@@ -526,7 +526,9 @@ class TestBoltztrapAnalyzerFromFiles:
     def test_unknown_run_type(self, tmp_path):
         path_dir = self._copy_fermi_inputs(tmp_path)
         outputtrans = tmp_path / "boltztrap.outputtrans"
-        outputtrans.write_text(outputtrans.read_text().replace("Calc type: FERMI", "Calc type: FOO"))
+        outputtrans.write_text(
+            outputtrans.read_text(encoding="utf-8").replace("Calc type: FERMI", "Calc type: FOO"), encoding="utf-8"
+        )
         with pytest.raises(ValueError, match="run_type='FOO' not recognized"):
             BoltztrapAnalyzer.from_files(path_dir)
 
@@ -591,7 +593,7 @@ class TestBoltztrapRunner:
     def test_write_energy(self, make_runner, cu2o_bs, tmp_path, cb_cut):
         runner = make_runner(cu2o_bs, 10, cb_cut=cb_cut)
         runner.write_energy(tmp_path / "boltztrap.energy")
-        lines = (tmp_path / "boltztrap.energy").read_text().splitlines()
+        lines = (tmp_path / "boltztrap.energy").read_text(encoding="utf-8").splitlines()
         n_bands = math.floor(cu2o_bs.nb_bands * (1 - cb_cut / 100))
         n_kpts = len(cu2o_bs.kpoints)
         assert lines[0] == "test"
@@ -609,7 +611,7 @@ class TestBoltztrapRunner:
     def test_write_energy_fermi(self, make_runner, cu2o_bs, tmp_path, cond_band, sign):
         runner = make_runner(cu2o_bs, 10, run_type="FERMI", band_nb=20, spin=1, cond_band=cond_band)
         runner.write_energy(tmp_path / "boltztrap.energyso")
-        lines = (tmp_path / "boltztrap.energyso").read_text().splitlines()
+        lines = (tmp_path / "boltztrap.energyso").read_text(encoding="utf-8").splitlines()
         assert int(lines[1]) == len(cu2o_bs.kpoints)
         assert len(lines) == 2 + 2 * len(cu2o_bs.kpoints)
         for kpt_idx in (0, 5):
@@ -620,7 +622,7 @@ class TestBoltztrapRunner:
     def test_write_energy_fermi_kpoint_line(self, make_runner, cu2o_bs, tmp_path):
         runner = make_runner(cu2o_bs, 10, run_type="FERMI", band_nb=20, spin=1)
         runner.write_energy(tmp_path / "boltztrap.energyso")
-        kpt_line = (tmp_path / "boltztrap.energyso").read_text().splitlines()[4]
+        kpt_line = (tmp_path / "boltztrap.energyso").read_text(encoding="utf-8").splitlines()[4]
         tokens = kpt_line.split()
         assert len(tokens) == 4
         assert [float(t) for t in tokens[:3]] == approx(cu2o_bs.kpoints[1].frac_coords, abs=1e-8)
@@ -629,7 +631,7 @@ class TestBoltztrapRunner:
     def test_write_energy_dos_spin_polarized(self, make_runner, spin_bs, tmp_path):
         runner = make_runner(spin_bs, 10, run_type="DOS", spin=-1)
         runner.write_energy(tmp_path / "boltztrap.energyso")
-        lines = (tmp_path / "boltztrap.energyso").read_text().splitlines()
+        lines = (tmp_path / "boltztrap.energyso").read_text(encoding="utf-8").splitlines()
         n_eigs = math.floor(spin_bs.nb_bands * 0.9) + 2  # padded with the low/high energy limits
         assert int(lines[2].split()[3]) == n_eigs
         energies = [float(line) for line in lines[3 : 3 + n_eigs]]
@@ -641,7 +643,7 @@ class TestBoltztrapRunner:
     def test_write_struct(self, make_runner, cu2o_bs, tmp_path, symprec):
         runner = make_runner(cu2o_bs, 10, symprec=symprec)
         runner.write_struct(tmp_path / "boltztrap.struct")
-        lines = (tmp_path / "boltztrap.struct").read_text().splitlines()
+        lines = (tmp_path / "boltztrap.struct").read_text(encoding="utf-8").splitlines()
         n_ops = int(lines[4])
         assert len(lines) == 5 + 3 * n_ops
         if symprec is None:
@@ -665,7 +667,7 @@ class TestBoltztrapRunner:
     def test_write_def(self, make_runner, request, tmp_path, bs_name, soc, energy_file):
         runner = make_runner(request.getfixturevalue(bs_name), 10, soc=soc)
         runner.write_def(tmp_path / "BoltzTraP.def")
-        lines = (tmp_path / "BoltzTraP.def").read_text().splitlines()
+        lines = (tmp_path / "BoltzTraP.def").read_text(encoding="utf-8").splitlines()
         assert len(lines) == 12
         assert lines[3].startswith(f"10,'{energy_file}',")
         assert lines[0].startswith("5, 'boltztrap.intrans'")
@@ -675,7 +677,7 @@ class TestBoltztrapRunner:
         doping = [1e18, 1e19]
         runner = make_runner(cu2o_bs, 10, scissor=scissor, dos_type="TETRA", doping=doping, tmax=800, tgrid=100)
         runner.write_intrans(tmp_path / "boltztrap.intrans")
-        lines = (tmp_path / "boltztrap.intrans").read_text().splitlines()
+        lines = (tmp_path / "boltztrap.intrans").read_text(encoding="utf-8").splitlines()
         assert lines[0].startswith("GENE")
         assert lines[1].split()[2] == set_gap
         assert lines[5].split()[0] == "BOLTZ"
@@ -691,14 +693,14 @@ class TestBoltztrapRunner:
     def test_write_intrans_boltz_nelec(self, make_runner, cu2o_bs, tmp_path):
         runner = make_runner(cu2o_bs, 10)
         runner.write_intrans(tmp_path / "boltztrap.intrans")
-        lines = (tmp_path / "boltztrap.intrans").read_text().splitlines()
+        lines = (tmp_path / "boltztrap.intrans").read_text(encoding="utf-8").splitlines()
         assert lines[2].split("#")[0].split()[-1] == "10.0"
 
     @pytest.mark.parametrize("run_type", ["BOLTZ", "FERMI", "BANDS"])
     def test_write_intrans_plain_numbers(self, make_runner, cu2o_bs, tmp_path, run_type):
         runner = make_runner(cu2o_bs, 10, run_type=run_type, band_nb=6, spin=1, scissor=0.5)
         runner.write_intrans(tmp_path / "boltztrap.intrans")
-        lines = (tmp_path / "boltztrap.intrans").read_text().splitlines()
+        lines = (tmp_path / "boltztrap.intrans").read_text(encoding="utf-8").splitlines()
         # Fortran list-directed input: only numbers before the comment
         for line in lines[1:3]:
             assert "Ry" not in line.split("#")[0]
@@ -707,19 +709,19 @@ class TestBoltztrapRunner:
     def test_write_intrans_fermi(self, make_runner, cu2o_bs, tmp_path):
         runner = make_runner(cu2o_bs, 10, run_type="FERMI", band_nb=6, spin=1)
         runner.write_intrans(tmp_path / "boltztrap.intrans")
-        lines = (tmp_path / "boltztrap.intrans").read_text().splitlines()
+        lines = (tmp_path / "boltztrap.intrans").read_text(encoding="utf-8").splitlines()
         assert lines[1].split()[:4] == ["1", "0", "0", "0.0"]
         assert lines[2].split("#")[0].split()[-1] == "10.0"
         assert lines[5].split()[0] == "FERMI"
         assert lines[6].endswith("actual band selected: 7 spin: 1")
         # same content as the intrans from the reference FERMI run
-        ref_lines = Path(f"{TEST_DIR}/fermi/boltztrap.intrans").read_text().splitlines()
+        ref_lines = Path(f"{TEST_DIR}/fermi/boltztrap.intrans").read_text(encoding="utf-8").splitlines()
         assert lines[6] == ref_lines[6]
 
     def test_write_intrans_bands_default_kpath(self, make_runner, cu2o_bs, tmp_path):
         runner = make_runner(cu2o_bs, 10, run_type="BANDS")
         runner.write_intrans(tmp_path / "boltztrap.intrans")
-        lines = (tmp_path / "boltztrap.intrans").read_text().splitlines()
+        lines = (tmp_path / "boltztrap.intrans").read_text(encoding="utf-8").splitlines()
         n_kpts = len(HighSymmKpath(cu2o_bs.structure).get_kpoints(coords_are_cartesian=False)[0])
         assert lines[5].split()[0] == "BANDS"
         assert lines[6] == f"P {n_kpts}"
@@ -732,7 +734,7 @@ class TestBoltztrapRunner:
         kpt_line = [Kpoint([0, 0, 0], lattice), Kpoint([0.5, 0, 0], lattice), Kpoint([0.5, 0.5, 0], lattice)]
         runner = make_runner(cu2o_bs, 10, run_type="BANDS", kpt_line=kpt_line)
         runner.write_intrans(tmp_path / "boltztrap.intrans")
-        lines = (tmp_path / "boltztrap.intrans").read_text().splitlines()
+        lines = (tmp_path / "boltztrap.intrans").read_text(encoding="utf-8").splitlines()
         assert lines[6] == "P 3"
         assert [[float(t) for t in line.split()] for line in lines[7:]] == [[0, 0, 0], [0.5, 0, 0], [0.5, 0.5, 0]]
         assert all(isinstance(kpt, np.ndarray) for kpt in runner.kpt_line)
@@ -763,7 +765,7 @@ class TestBoltztrapRunner:
         # DOS run uses the full energy range: span set automatically
         assert runner.energy_span_around_fermi > 1.5
         # write_proj overwrites BoltzTraP.def with one entry per projection file
-        def_lines = (tmp_path / "BoltzTraP.def").read_text().splitlines()
+        def_lines = (tmp_path / "BoltzTraP.def").read_text(encoding="utf-8").splitlines()
         assert len(def_lines) == 12 + len(proj_files)
         assert def_lines[12].startswith("1000,")
         assert def_lines[-1].startswith(f"{1000 + len(proj_files) - 1},")
@@ -772,7 +774,7 @@ class TestBoltztrapRunner:
         runner = make_runner(cu2o_bs, 10, run_type="DOS", spin=1)
         runner.write_proj(f"{tmp_path}/boltztrap.proj", f"{tmp_path}/BoltzTraP.def")
         n_bands = math.floor(cu2o_bs.nb_bands * 0.9)
-        lines = (tmp_path / "boltztrap.proj_1_px").read_text().splitlines()
+        lines = (tmp_path / "boltztrap.proj_1_px").read_text(encoding="utf-8").splitlines()
         assert lines[0] == cu2o_bs.structure.formula
         assert int(lines[1]) == len(cu2o_bs.kpoints)
         assert len(lines) == 2 + len(cu2o_bs.kpoints) * (n_bands + 1)
@@ -785,7 +787,7 @@ class TestBoltztrapRunner:
     def test_write_proj_def_format(self, make_runner, cu2o_bs, tmp_path):
         runner = make_runner(cu2o_bs, 10, run_type="DOS", spin=1)
         runner.write_proj(f"{tmp_path}/boltztrap.proj", f"{tmp_path}/BoltzTraP.def")
-        content = (tmp_path / "BoltzTraP.def").read_text()
+        content = (tmp_path / "BoltzTraP.def").read_text(encoding="utf-8")
         # format of the reference DOS run in test-files/electronic_structure/boltztrap/dos_up/BoltzTraP.def
         assert "1000,'boltztrap.proj_0_s' 'old', 'formatted',0" in content
 
