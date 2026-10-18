@@ -856,7 +856,7 @@ COMPLETION = "Thank you very much for using Q-Chem.  Have a nice day.\n"
 
 def _write_and_parse(tmp_path, text: str) -> dict:
     out_file = tmp_path / "mol.qout"
-    out_file.write_text(text)
+    out_file.write_text(text, encoding="utf-8")
     return QCOutput(str(out_file)).data
 
 

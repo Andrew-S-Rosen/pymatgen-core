@@ -3129,7 +3129,7 @@ Site: H (-0.5134, 0.8892, -0.3630)"""
 
     def test_from_file_unknown_extension(self):
         path = Path(f"{self.tmp_path}/methane.unknownext")
-        path.write_text("junk")
+        path.write_text("junk", encoding="utf-8")
         with pytest.raises(ValueError, match="Cannot determine file type"):
             IMolecule.from_file(path)
 
