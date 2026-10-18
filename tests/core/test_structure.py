@@ -1919,7 +1919,7 @@ class TestStructure(MatSciTest):
         assert_allclose(self.struct.frac_coords[1], [0.75, 0.5, 0.75], atol=1e-6)
 
         with pytest.raises(IndexError, match="list index out of range"):
-            self.struct.rotate_sites([5], 2.0 * np.pi / 3.0, self.struct[0].coords, to_unit_cell=False)
+            self.struct.rotate_sites([5], 2.0 * np.pi / 3.0, anchor=self.struct[0].coords, to_unit_cell=False)
 
     def test_mul(self):
         self.struct *= [2, 1, 1]
