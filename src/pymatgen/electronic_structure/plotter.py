@@ -3167,10 +3167,10 @@ class BoltztrapPlotter:
 
         fig = pretty_plot(22, 14).figure
         fig.clear()  # n- and p-type curves go on two side-by-side panels
+        axes = [fig.add_subplot(121 + idx) for idx in range(2)]
         temperatures = sorted(sbk["n"])
         doping = self._bz.doping["n"] if doping == "all" else doping
-        for idx, dop_type in enumerate("np"):
-            ax = fig.add_subplot(121 + idx)
+        for idx, (dop_type, ax) in enumerate(zip("np", axes, strict=True)):
             for dop in doping:
                 dop_idx = self._bz.doping[dop_type].index(dop)
                 sbk_temp = [sbk[dop_type][temp][dop_idx] for temp in temperatures]
@@ -3196,7 +3196,7 @@ class BoltztrapPlotter:
 
         plt.tight_layout()
 
-        return ax
+        return axes[1]
 
     def plot_conductivity_temp(
         self,
@@ -3223,10 +3223,10 @@ class BoltztrapPlotter:
 
         fig = pretty_plot(22, 14).figure
         fig.clear()  # n- and p-type curves go on two side-by-side panels
+        axes = [fig.add_subplot(121 + idx) for idx in range(2)]
         temperatures = sorted(cond["n"])
         doping = self._bz.doping["n"] if doping == "all" else doping
-        for idx, dop_type in enumerate("np"):
-            ax = fig.add_subplot(121 + idx)
+        for idx, (dop_type, ax) in enumerate(zip("np", axes, strict=True)):
             for dop in doping:
                 dop_idx = self._bz.doping[dop_type].index(dop)
                 cond_temp = [cond[dop_type][temp][dop_idx] for temp in temperatures]
@@ -3253,7 +3253,7 @@ class BoltztrapPlotter:
 
         plt.tight_layout()
 
-        return ax
+        return axes[1]
 
     def plot_power_factor_temp(
         self,
@@ -3280,10 +3280,10 @@ class BoltztrapPlotter:
 
         fig = pretty_plot(22, 14).figure
         fig.clear()  # n- and p-type curves go on two side-by-side panels
+        axes = [fig.add_subplot(121 + idx) for idx in range(2)]
         temperatures = sorted(pow_factor["n"])
         doping = self._bz.doping["n"] if doping == "all" else doping
-        for idx, dop_type in enumerate("np"):
-            ax = fig.add_subplot(121 + idx)
+        for idx, (dop_type, ax) in enumerate(zip("np", axes, strict=True)):
             for dop in doping:
                 dop_idx = self._bz.doping[dop_type].index(dop)
                 pf_temp = [pow_factor[dop_type][temp][dop_idx] for temp in temperatures]
@@ -3309,7 +3309,7 @@ class BoltztrapPlotter:
             ax.ticklabel_format(style="sci", axis="y", scilimits=(0, 0))
 
         plt.tight_layout()
-        return ax
+        return axes[1]
 
     def plot_zt_temp(
         self,
@@ -3338,10 +3338,10 @@ class BoltztrapPlotter:
 
         fig = pretty_plot(22, 14).figure
         fig.clear()  # n- and p-type curves go on two side-by-side panels
+        axes = [fig.add_subplot(121 + idx) for idx in range(2)]
         temperatures = sorted(zt["n"])
         doping = self._bz.doping["n"] if doping == "all" else doping
-        for idx, dop_type in enumerate("np"):
-            ax = fig.add_subplot(121 + idx)
+        for idx, (dop_type, ax) in enumerate(zip("np", axes, strict=True)):
             for dop in doping:
                 dop_idx = self._bz.doping[dop_type].index(dop)
                 zt_temp = [zt[dop_type][temp][dop_idx] for temp in temperatures]
@@ -3366,7 +3366,7 @@ class BoltztrapPlotter:
             ax.tick_params(axis="y", labelsize=25)
 
         plt.tight_layout()
-        return ax
+        return axes[1]
 
     def plot_eff_mass_temp(self, doping="all", output: Literal["average", "eigs"] = "average"):
         """Plot the average effective mass in function of temperature
@@ -3388,10 +3388,10 @@ class BoltztrapPlotter:
 
         fig = pretty_plot(22, 14).figure
         fig.clear()  # n- and p-type curves go on two side-by-side panels
+        axes = [fig.add_subplot(121 + idx) for idx in range(2)]
         temperatures = sorted(eff_mass["n"])
         doping = self._bz.doping["n"] if doping == "all" else doping
-        for idx, dop_type in enumerate("np"):
-            ax = fig.add_subplot(121 + idx)
+        for idx, (dop_type, ax) in enumerate(zip("np", axes, strict=True)):
             for dop in doping:
                 dop_idx = self._bz.doping[dop_type].index(dop)
                 em_temp = [eff_mass[dop_type][temp][dop_idx] for temp in temperatures]
@@ -3415,7 +3415,7 @@ class BoltztrapPlotter:
             ax.tick_params(labelsize=25)
 
         plt.tight_layout()
-        return ax
+        return axes[1]
 
     def plot_seebeck_dop(self, temps="all", output: Literal["average", "eigs"] = "average"):
         """Plot the Seebeck in function of doping levels for different temperatures.
@@ -3434,8 +3434,8 @@ class BoltztrapPlotter:
         temperatures = sorted(sbk["n"]) if temps == "all" else temps
         fig = pretty_plot(22, 14).figure
         fig.clear()  # n- and p-type curves go on two side-by-side panels
-        for idx, dop_type in enumerate("np"):
-            ax = fig.add_subplot(121 + idx)
+        axes = [fig.add_subplot(121 + idx) for idx in range(2)]
+        for idx, (dop_type, ax) in enumerate(zip("np", axes, strict=True)):
             for temp in temperatures:
                 if output == "eigs":
                     for xyz in range(3):
@@ -3465,7 +3465,7 @@ class BoltztrapPlotter:
 
         plt.tight_layout()
 
-        return ax
+        return axes[1]
 
     def plot_conductivity_dop(
         self,
@@ -3494,8 +3494,8 @@ class BoltztrapPlotter:
         temperatures = sorted(cond["n"]) if temps == "all" else temps
         fig = pretty_plot(22, 14).figure
         fig.clear()  # n- and p-type curves go on two side-by-side panels
-        for idx, dop_type in enumerate("np"):
-            ax = fig.add_subplot(121 + idx)
+        axes = [fig.add_subplot(121 + idx) for idx in range(2)]
+        for idx, (dop_type, ax) in enumerate(zip("np", axes, strict=True)):
             for temp in temperatures:
                 if output == "eigs":
                     for xyz in range(3):
@@ -3524,7 +3524,7 @@ class BoltztrapPlotter:
 
         plt.tight_layout()
 
-        return ax
+        return axes[1]
 
     def plot_power_factor_dop(
         self,
@@ -3552,8 +3552,8 @@ class BoltztrapPlotter:
         temperatures = sorted(pow_factor["n"]) if temps == "all" else temps
         fig = pretty_plot(22, 14).figure
         fig.clear()  # n- and p-type curves go on two side-by-side panels
-        for idx, dop_type in enumerate("np"):
-            ax = fig.add_subplot(121 + idx)
+        axes = [fig.add_subplot(121 + idx) for idx in range(2)]
+        for idx, (dop_type, ax) in enumerate(zip("np", axes, strict=True)):
             for temp in temperatures:
                 if output == "eigs":
                     for xyz in range(3):
@@ -3583,7 +3583,7 @@ class BoltztrapPlotter:
 
         plt.tight_layout()
 
-        return ax
+        return axes[1]
 
     def plot_zt_dop(
         self,
@@ -3612,8 +3612,8 @@ class BoltztrapPlotter:
         temperatures = sorted(zt["n"]) if temps == "all" else temps
         fig = pretty_plot(22, 14).figure
         fig.clear()  # n- and p-type curves go on two side-by-side panels
-        for idx, dop_type in enumerate("np"):
-            ax = fig.add_subplot(121 + idx)
+        axes = [fig.add_subplot(121 + idx) for idx in range(2)]
+        for idx, (dop_type, ax) in enumerate(zip("np", axes, strict=True)):
             for temp in temperatures:
                 if output == "eigs":
                     for xyz in range(3):
@@ -3643,7 +3643,7 @@ class BoltztrapPlotter:
 
         plt.tight_layout()
 
-        return ax
+        return axes[1]
 
     def plot_eff_mass_dop(self, temps="all", output: Literal["average", "eigs"] = "average"):
         """Plot the average effective mass in function of doping levels
@@ -3667,8 +3667,8 @@ class BoltztrapPlotter:
         temperatures = sorted(em["n"]) if temps == "all" else temps
         fig = pretty_plot(22, 14).figure
         fig.clear()  # n- and p-type curves go on two side-by-side panels
-        for idx, dop_type in enumerate("np"):
-            ax = fig.add_subplot(121 + idx)
+        axes = [fig.add_subplot(121 + idx) for idx in range(2)]
+        for idx, (dop_type, ax) in enumerate(zip("np", axes, strict=True)):
             for temp in temperatures:
                 if output == "eigs":
                     for xyz in range(3):
@@ -3698,7 +3698,7 @@ class BoltztrapPlotter:
 
         plt.tight_layout()
 
-        return ax
+        return axes[1]
 
     def plot_dos(self, sigma=0.05):
         """Plot dos.
