@@ -17,6 +17,7 @@ from monty.dev import requires
 
 from pymatgen.core.lattice import Lattice
 from pymatgen.core.operations import MagSymmOp, SymmOp
+from pymatgen.symmetry._spglib_compat import call_spglib, ignore_spglib_error_handling_warning
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer, cite_conventional_cell_algo
 
 try:
@@ -931,14 +932,18 @@ class KPathSeek(KPathBase):
 
         cell = (self._latt.matrix, positions, numbers)
 
-        spg_struct = spglib.standardize_cell(
+        spg_struct = call_spglib(
+            spglib.standardize_cell,
             cell,  # type: ignore[arg-type]
             to_primitive=False,
             no_idealize=True,
             symprec=symprec,  # type: ignore[arg-type]
         )
+        if spg_struct is None:
+            raise ValueError("spglib failed to standardize the cell")
 
-        spath_dat = get_path(spg_struct, system_is_tri, "hpkot", atol, symprec, angle_tolerance)
+        with ignore_spglib_error_handling_warning():  # seekpath calls spglib with the old error handling
+            spath_dat = get_path(spg_struct, system_is_tri, "hpkot", atol, symprec, angle_tolerance)
 
         self._tmat = self._trans_sc_to_Hin(spath_dat["bravais_lattice_extended"])
         self._rec_lattice = Lattice(spath_dat["reciprocal_primitive_lattice"])
