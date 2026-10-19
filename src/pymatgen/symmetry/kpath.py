@@ -1751,8 +1751,9 @@ class KPathLatimerMunro(KPathBase):
 
     @staticmethod
     def _closewrapped(pos1, pos2, tolerance):
-        pos1 %= 1.0
-        pos2 %= 1.0
+        # wrap copies; callers pass views such as SymmOp.translation_vector
+        pos1 = np.mod(pos1, 1.0)
+        pos2 = np.mod(pos2, 1.0)
 
         if len(pos1) != len(pos2):
             return False

@@ -121,7 +121,6 @@ class TestKPathLatimerMunroHelpers:
     def test_closewrapped(self, pos1, pos2, expected):
         assert KPathLatimerMunro._closewrapped(np.array(pos1), np.array(pos2), np.ones(3) * 1e-5) is expected
 
-    @pytest.mark.xfail(strict=True, reason="_closewrapped wraps its arguments in place (pos %= 1.0)")
     def test_closewrapped_does_not_mutate(self):
         op = SymmOp.from_rotation_and_translation(np.eye(3), [1.25, 0, 0])
         KPathLatimerMunro._closewrapped(op.translation_vector, np.zeros(3), np.ones(3) * 1e-5)
