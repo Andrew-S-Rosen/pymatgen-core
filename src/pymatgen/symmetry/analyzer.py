@@ -1118,7 +1118,8 @@ class PointGroupAnalyzer:
             # of the system. This mitigates the problem of choosing a proper
             # comparison tolerance for the eigenvalues.
             inertia_tensor /= total_inertia
-            eigvals, eigvecs = np.linalg.eig(inertia_tensor)
+            # The inertia tensor is real symmetric, so use eigh (eig returns complex arrays on NumPy >= 2.5)
+            eigvals, eigvecs = np.linalg.eigh(inertia_tensor)
             self.principal_axes = eigvecs.T
             self.eigvals = eigvals
             v1, v2, v3 = eigvals

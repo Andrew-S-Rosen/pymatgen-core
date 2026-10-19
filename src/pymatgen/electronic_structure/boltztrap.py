@@ -1608,11 +1608,13 @@ class BoltztrapAnalyzer:
             if structure[idx] not in pdoss:
                 pdoss[structure[idx]] = {}
             for o in self._dos_partial[s]:
-                if Orbital[o] not in pdoss[structure[idx]]:
-                    pdoss[structure[idx]][Orbital[o]] = {}
-                pdoss[structure[idx]][Orbital[o]][spin_1] = self._dos_partial[s][o]
+                # BoltzTraP names the dx2-y2 orbital "dx2" in its projection files
+                orbital = Orbital["dx2_y2" if o == "dx2" else o]
+                if orbital not in pdoss[structure[idx]]:
+                    pdoss[structure[idx]][orbital] = {}
+                pdoss[structure[idx]][orbital][spin_1] = self._dos_partial[s][o]
                 if analyzer_for_second_spin:
-                    pdoss[structure[idx]][Orbital[o]][spin_2] = analyzer_for_second_spin._dos_partial[s][o]
+                    pdoss[structure[idx]][orbital][spin_2] = analyzer_for_second_spin._dos_partial[s][o]
 
         if analyzer_for_second_spin:
             total_dos = Dos(
