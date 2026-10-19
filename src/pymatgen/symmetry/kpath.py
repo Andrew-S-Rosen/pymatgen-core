@@ -1114,7 +1114,8 @@ class KPathLatimerMunro(KPathBase):
 
         if has_magmoms:
             grey_struct = self._structure.copy()
-            grey_struct.remove_site_property("magmom")
+            if "magmom" in grey_struct.site_properties:
+                grey_struct.remove_site_property("magmom")
             sga = SpacegroupAnalyzer(grey_struct, symprec=symprec, angle_tolerance=angle_tolerance)
             grey_ops = sga.get_symmetry_operations()
             self._structure = self._convert_all_magmoms_to_vectors(magmom_axis, axis_specified)

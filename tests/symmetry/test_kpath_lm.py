@@ -68,11 +68,6 @@ class TestKPathLatimerMunroMagnetic:
         # P-1 with inversion (no time reversal): every segment starts or ends at Gamma
         assert all("Γ" in segment for segment in kpath.kpath["path"])
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="has_magmoms=True without a 'magmom' site property raises KeyError in remove_site_property "
-        "before the zero-magmom fallback in _convert_all_magmoms_to_vectors is reached",
-    )
     def test_has_magmoms_without_magmom_property(self):
         struct = Structure(Lattice.cubic(3), ["Fe"], [[0, 0, 0]])
         with pytest.warns(UserWarning, match="All magnetic moments are being set to zero"):
