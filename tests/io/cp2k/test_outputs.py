@@ -234,7 +234,6 @@ class TestCp2kOutput:
         assert hirshfeld[0]["net_charge"] == "-0.000"
         assert hirshfeld[1]["spin_moment"] == "0.000"
 
-    @pytest.mark.xfail(strict=True, reason="parse_hirshfeld keeps only the alpha population (site[4:5] not site[4:6])")
     def test_hirshfeld_population(self):
         self.out.parse_hirshfeld()
         assert self.out.structures[0].site_properties["hirshfeld"][0]["population"] == ("2.000", "2.000")
@@ -505,7 +504,6 @@ class TestCp2kOutputModified:
         out.parse_stresses()
         assert out.data["stress_tensor"] == [[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]]]
 
-    @pytest.mark.xfail(strict=True, reason="parse_mo_eigenvalues builds the tdos from spin-down unoccupied levels")
     def test_mo_eigenvalues_tdos_spin(self, tmp_path):
         filename = _copy_run(tmp_path)
         text = filename.read_text(encoding="utf-8")
@@ -565,7 +563,6 @@ class TestCp2kOutputModified:
         out.parse_stresses()
         assert out.data["stress_tensor"] == [[[1, 2, 3], [4, 5, 6], [7, 8, 9]]]
 
-    @pytest.mark.xfail(strict=True, reason="parse_structures with explicit lattice_file reshapes latt[2:] incl. volume")
     def test_explicit_lattice_file(self, tmp_path):
         filename = _copy_run(tmp_path)
         cell = tmp_path / "my_cell.txt"

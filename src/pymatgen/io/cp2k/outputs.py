@@ -294,7 +294,11 @@ class Cp2kOutput:
                 raise FileNotFoundError("Unable to automatically determine lattice file. More than one exist.")
         else:
             latt_file = np.loadtxt(lattice_file)
-            lattices = [latt[2:].reshape(3, 3) for latt in latt_file]
+            lattices = (
+                [latt[2:11].reshape(3, 3) for latt in latt_file]
+                if len(latt_file.shape) > 1
+                else [latt_file[2:11].reshape(3, 3)]
+            )
 
         if not trajectory_file:
             self.structures = [self.initial_structure]
@@ -991,7 +995,7 @@ class Cp2kOutput:
                 net_charge = []
                 spin_moment = []
                 for site in ionic_step:
-                    population.append(tuple(site[4:5]))
+                    population.append(tuple(site[4:6]))
                     spin_moment.append(site[6])
                     net_charge.append(site[7])
                 hirshfeld = [
@@ -1149,7 +1153,7 @@ class Cp2kOutput:
         n_unocc = len(eigenvalues[-1]["unoccupied"][Spin.up])
         self.data["tdos"] = Dos(
             efermi=self.vbm + 1e-6,
-            energies=list(eigenvalues[-1]["occupied"][Spin.up]) + list(eigenvalues[-1]["unoccupied"][Spin.down]),
+            energies=list(eigenvalues[-1]["occupied"][Spin.up]) + list(eigenvalues[-1]["unoccupied"][Spin.up]),
             densities={
                 Spin.up: [1 for _ in range(n_occ)] + [0 for _ in range(n_unocc)],
                 Spin.down: [1 for _ in range(n_occ)] + [0 for _ in range(n_unocc)],

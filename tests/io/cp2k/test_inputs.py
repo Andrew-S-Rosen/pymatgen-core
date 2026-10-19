@@ -405,7 +405,6 @@ class TestKeywordList:
         assert kl1 != KeywordList([Keyword("A", 2), Keyword("A", 1)])
         assert kl1.__eq__(Keyword("A", 1)) is NotImplemented
 
-    @pytest.mark.xfail(strict=True, reason="KeywordList.__eq__ uses zip(strict=True) and raises for unequal lengths")
     def test_eq_different_length(self):
         assert KeywordList([Keyword("A", 1)]) != KeywordList([Keyword("A", 1), Keyword("A", 2)])
 
@@ -414,7 +413,6 @@ class TestKeywordList:
         kw_list.verbosity(True)  # noqa: FBT003
         assert kw_list.get_str() == "A 1 ! d1 \nA 2 ! d2"
 
-    @pytest.mark.xfail(strict=True, reason="KeywordList.__add__ returns the None result of extend()")
     def test_add(self):
         kw_list = KeywordList([Keyword("A", 1)])
         new = kw_list + [Keyword("A", 2)]  # noqa: RUF005
@@ -475,10 +473,6 @@ class TestSection:
         with pytest.raises(TypeError, match="Can only add keywords, not Section"):
             section.add(Section("X"))
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="Section.__add__ sets the keyword to None when it is already a KeywordList (KeywordList.__add__)",
-    )
     def test_add_to_keyword_list(self):
         sec = Section("S", keywords={"A": KeywordList([Keyword("A", 1), Keyword("A", 2)])})
         sec += Keyword("A", 3)
@@ -567,7 +561,6 @@ class TestSection:
         with pytest.raises(TypeError, match="Can only add sections or keywords"):
             section.inc({"X": None})
 
-    @pytest.mark.xfail(strict=True, reason="Section.inc routes Section values to Section.add, which rejects sections")
     def test_inc_section(self, section):
         section.inc({"NEWSEC": Section("NEWSEC")})
         assert section.check("NEWSEC")
@@ -595,9 +588,6 @@ class TestSection:
     def test_msonable(self, section):
         assert Section.from_dict(section.as_dict()) == section
 
-    @pytest.mark.xfail(
-        strict=True, reason="Section.silence recurses into SectionList, which has no silence(), so __eq__ fails"
-    )
     def test_eq_with_section_list(self):
         kpt_set = KpointSet(10, [("GAMMA", (0, 0, 0)), ("X", (0.5, 0, 0))])
         band = BandStructure([kpt_set, kpt_set])
@@ -626,7 +616,6 @@ class TestSectionListExtra:
         with pytest.raises(ValueError, match="some section name is invalid"):
             SectionList([Section("A"), Section("B")])
 
-    @pytest.mark.xfail(strict=True, reason="SectionList.__eq__ uses zip(strict=True) and raises for unequal lengths")
     def test_eq_different_length(self):
         assert SectionList([Section("A")]) != SectionList([Section("A"), Section("A")])
 
@@ -671,9 +660,6 @@ class TestCp2kInputExtra:
         ci2 = Cp2kInput.from_str(ci.get_str())
         assert ci2.get_str() == ci.get_str()
 
-    @pytest.mark.xfail(
-        strict=True, reason="Cp2kInput._from_lines prepends the 2nd repeat of a keyword, reversing input order"
-    )
     def test_repeated_keyword_order(self):
         ci = Cp2kInput.from_str("&A\nX 1\nX 2\nX 3\n&END A")
         assert [kw.values[0] for kw in ci["A"]["X"]] == [1, 2, 3]
@@ -767,13 +753,11 @@ class TestConvenienceSections:
         assert kind["BASIS_SET"].get_str() == "BASIS_SET DZVP \nBASIS_SET AUX_FIT cFIT3"
         assert kind.get("POTENTIAL") is None
 
-    @pytest.mark.xfail(strict=True, reason="Kind writes the raw MAGNETIZATION keyword even for closed-shell elements")
     def test_kind_closed_shell_magnetization(self):
         kind = Kind("Ne", magnetization=2)
         assert kind.magnetization == 0
         assert kind["MAGNETIZATION"] == Keyword("MAGNETIZATION", 0)
 
-    @pytest.mark.xfail(strict=True, reason="Kind with a str aux_basis writes 'BASIS_SET BASIS_SET AUX_FIT ...'")
     def test_kind_str_aux_basis(self):
         kind = Kind("H", basis_set="DZVP", aux_basis="cFIT3")
         assert kind["BASIS_SET"][1].get_str() == "BASIS_SET AUX_FIT cFIT3"
@@ -785,7 +769,6 @@ class TestConvenienceSections:
         assert dftu["U_MINUS_J"] == Keyword("U_MINUS_J", 3.0)
         assert dftu["U_RAMPING"] == Keyword("U_RAMPING", 0.1)
 
-    @pytest.mark.xfail(strict=True, reason="DftPlusU hardcodes the eps_u_ramping/init_u_ramping_each_scf attributes")
     def test_dft_plus_u_attributes(self):
         dftu = DftPlusU(eps_u_ramping=1e-3, init_u_ramping_each_scf=True)
         assert dftu.eps_u_ramping == approx(1e-3)
@@ -853,17 +836,12 @@ class TestConvenienceSections:
             assert sum(alpha) + sum(beta) == sum(no_spin[0]) + sum(no_spin[1])
             assert alpha != beta
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="BrokenSymmetry.from_el spin loop is not antisymmetric in spin sign (spin=-1 != mirror of +1)",
-    )
     def test_broken_symmetry_spin_sign_symmetry(self):
         up = BrokenSymmetry.from_el("Fe", 3, spin=1)
         down = BrokenSymmetry.from_el("Fe", 3, spin=-1)
         assert down["ALPHA"]["NEL"] == up["BETA"]["NEL"]
         assert down["BETA"]["NEL"] == up["ALPHA"]["NEL"]
 
-    @pytest.mark.xfail(strict=True, reason="BrokenSymmetry.from_el maps the f orbital to l=4 instead of l=3")
     def test_broken_symmetry_f_orbital(self):
         bs = BrokenSymmetry.from_el("Ce", oxi_state=4)
         assert bs["ALPHA"]["L"] == Keyword("L", 0, 2, 3)
@@ -888,9 +866,6 @@ class TestKpoints:
         with pytest.raises(ValueError, match="No k-points provided"):
             Kpoints(kpts=[])
 
-    @pytest.mark.xfail(
-        strict=True, reason="Kpoints overwrites the SCHEME keyword built from a single mesh, losing the grid"
-    )
     def test_single_mesh(self):
         kpts = Kpoints(kpts=[(2, 3, 4)])
         assert kpts["SCHEME"] == Keyword("SCHEME", "MONKHORST-PACK", 2, 3, 4)
