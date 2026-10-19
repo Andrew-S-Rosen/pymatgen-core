@@ -1166,6 +1166,8 @@ class KPathLatimerMunro(KPathBase):
                     "This property will be removed and could result in different symmetry operations.",
                     stacklevel=2,
                 )
+                # work on a copy so the caller's structure keeps its magmoms
+                self._structure = self._structure.copy()
                 self._structure.remove_site_property("magmom")
             sga = SpacegroupAnalyzer(self._structure)
             ops = sga.get_symmetry_operations()

@@ -88,10 +88,6 @@ class TestKPathLatimerMunroMagnetic:
         assert kpath.mag_type == "0"
         assert "magmom" not in kpath.structure.site_properties
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="KPathLatimerMunro(has_magmoms=False) strips 'magmom' from the caller's Structure in place",
-    )
     def test_magmom_ignored_does_not_mutate_input(self):
         struct = Structure(Lattice.cubic(3), ["Fe"], [[0, 0, 0]])
         struct.add_site_property("magmom", [2.0])
