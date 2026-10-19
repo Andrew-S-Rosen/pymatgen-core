@@ -1114,7 +1114,8 @@ class KPathLatimerMunro(KPathBase):
 
         if has_magmoms:
             grey_struct = self._structure.copy()
-            grey_struct.remove_site_property("magmom")
+            if "magmom" in grey_struct.site_properties:
+                grey_struct.remove_site_property("magmom")
             sga = SpacegroupAnalyzer(grey_struct, symprec=symprec, angle_tolerance=angle_tolerance)
             grey_ops = sga.get_symmetry_operations()
             self._structure = self._convert_all_magmoms_to_vectors(magmom_axis, axis_specified)
@@ -1165,6 +1166,8 @@ class KPathLatimerMunro(KPathBase):
                     "This property will be removed and could result in different symmetry operations.",
                     stacklevel=2,
                 )
+                # work on a copy so the caller's structure keeps its magmoms
+                self._structure = self._structure.copy()
                 self._structure.remove_site_property("magmom")
             sga = SpacegroupAnalyzer(self._structure)
             ops = sga.get_symmetry_operations()
@@ -1748,8 +1751,9 @@ class KPathLatimerMunro(KPathBase):
 
     @staticmethod
     def _closewrapped(pos1, pos2, tolerance):
-        pos1 %= 1.0
-        pos2 %= 1.0
+        # wrap copies; callers pass views such as SymmOp.translation_vector
+        pos1 = np.mod(pos1, 1.0)
+        pos2 = np.mod(pos2, 1.0)
 
         if len(pos1) != len(pos2):
             return False
