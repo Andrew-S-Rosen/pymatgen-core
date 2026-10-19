@@ -242,11 +242,12 @@ class Cp2kOutput:
         self.filenames["chi_tensor"] = glob(os.path.join(self.dir, "*CHI*data*"))
         self.filenames["nmr_shift"] = glob(os.path.join(self.dir, "*SHIFT*data*"))
         self.filenames["raman"] = glob(os.path.join(self.dir, "*raman*data*"))
-        restart = glob(os.path.join(self.dir, "*restart*"))
+        # glob is case-insensitive on Windows, so filter by basename to avoid matching *-RESTART.wfn
+        restart = [r for r in glob(os.path.join(self.dir, "*restart*")) if "restart" in os.path.basename(r)]
         self.filenames["restart.bak"] = []
         self.filenames["restart"] = []
         for r in restart:
-            if "bak" in r.split("/")[-1]:
+            if "bak" in os.path.basename(r):
                 self.filenames["restart.bak"].append(r)
             else:
                 self.filenames["restart"].append(r)
@@ -254,7 +255,7 @@ class Cp2kOutput:
         wfn = glob(os.path.join(self.dir, "*.wfn*")) + glob(os.path.join(self.dir, "*.kp*"))
         self.filenames["wfn.bak"] = []
         for w in wfn:
-            if "bak" in w.split("/")[-1]:
+            if "bak" in os.path.basename(w):
                 self.filenames["wfn.bak"].append(w)
             else:
                 self.filenames["wfn"] = w
